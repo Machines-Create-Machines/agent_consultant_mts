@@ -48,9 +48,13 @@ def _load_chunks_jsonl(chunks_path: Path) -> dict[str, Chunk]:
 
 def load_chunks(kb_dir: Path) -> dict[str, Chunk]:
     """Load chunks keyed by `file.md#Heading` (prefers `build/chunks.jsonl` if present)."""
-    build_chunks = kb_dir.parent / "build" / "chunks.jsonl"
-    if build_chunks.exists():
-        return _load_chunks_jsonl(build_chunks)
+    # data/knowledge-base -> ROOT/build; legacy knowledge-base -> ROOT/build
+    for candidate in (
+        kb_dir.parent / "build" / "chunks.jsonl",
+        kb_dir.parent.parent / "build" / "chunks.jsonl",
+    ):
+        if candidate.exists():
+            return _load_chunks_jsonl(candidate)
 
     chunks: dict[str, Chunk] = {}
     if not kb_dir.exists():

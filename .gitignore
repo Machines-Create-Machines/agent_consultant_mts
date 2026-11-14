@@ -6,4 +6,8 @@ eval/_cache/
 eval/runs/
 .env
 .env.*
+!.env.example
 build/
+dist/
+answers.csv
+*.zip

@@ -1,0 +1,2 @@
+# Agent runtime (solution.py + agent/) uses the Python standard library only.
+# Eval extras are in requirements-eval.txt and are not part of the submit archive.

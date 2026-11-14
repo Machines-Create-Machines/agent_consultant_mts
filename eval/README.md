@@ -1,6 +1,6 @@
 # Eval contour
 
-Autonomous loop: run `solution.py` on `questions_dataset.jsonl`, write a reproducible report under `eval/runs/<run_id>/`.
+Autonomous loop: run `solution.py` on `data/questions_dataset.jsonl`, write a reproducible report under `eval/runs/<run_id>/`.
 
 ## Setup
 

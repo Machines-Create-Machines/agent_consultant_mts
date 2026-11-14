@@ -1,7 +1,7 @@
 # Eval contour defaults — keep weights/gates stable across runs.
 
-dataset_path: questions_dataset.jsonl
-knowledge_base_dir: knowledge-base
+dataset_path: data/questions_dataset.jsonl
+knowledge_base_dir: data/knowledge-base
 solution_module: solution
 
 # Retrieval / checkers
@@ -37,7 +37,7 @@ judge:
   soft_violation_check: false
 
 # Baseline answers for pairwise (path relative to project root). Optional.
-baseline_answers_path: demo_output.csv
+baseline_answers_path: data/demo_output.csv
 
 # Composite weights (must sum to 1.0)
 composite_weights:

@@ -17,9 +17,9 @@ from kb_build.validate import validate_build
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_KB = ROOT / "knowledge-base"
+DEFAULT_KB = ROOT / "data" / "knowledge-base"
 DEFAULT_OUT = ROOT / "build"
-DEFAULT_DATASET = ROOT / "questions_dataset.jsonl"
+DEFAULT_DATASET = ROOT / "data" / "questions_dataset.jsonl"
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:

@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
             root=project_root / cfg["judge"]["cache_dir"],
             enabled=not args.no_cache,
         )
-        baseline_path = project_root / cfg.get("baseline_answers_path", "demo_output.csv")
+        baseline_path = project_root / cfg.get("baseline_answers_path", "data/demo_output.csv")
         baseline_answers = load_baseline_answers(baseline_path)
         rows = enrich_with_judge(
             cases=cases,
