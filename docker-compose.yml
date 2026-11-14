@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Укажите DB_PASSWORD в файле .env}
+      POSTGRES_DB: ${DB_NAME:-clinical_recommendations}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Путь к init.sql изменился, так как папка db переехала в backend
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-clinical_recommendations}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  init-db:
+    build:
+      # Теперь сборка идет из папки backend
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    command: ["python", "db/init_db.py"]
+    env_file: .env
+    environment:
+      DB_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      # Теперь сборка идет из папки backend
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    env_file: .env
+    environment:
+      DB_HOST: db
+    ports:
+      - "8002:8002"
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      # Теперь сборка идет из папки frontend
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
