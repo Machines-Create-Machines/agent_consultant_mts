@@ -92,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--label", default=None, help="Alias for --tag")
     p.add_argument("--concurrency", type=int, default=None)
     p.add_argument("--solution-module", default=None)
+    p.add_argument(
+        "--strict-gates",
+        action="store_true",
+        help="Exit 1 when quality gates FAIL (default: exit 0 after a completed run)",
+    )
     return p
 
 
@@ -296,13 +301,24 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print(f"Wrote {run_dir}")
+    gates_pass = bool(metrics["gates"]["pass"])
+    checks = metrics["gates"].get("checks") or {}
     print(
-        f"gates={'PASS' if metrics['gates']['pass'] else 'FAIL'} "
+        f"gates={'PASS' if gates_pass else 'FAIL'} "
         f"composite={g.get('composite')} "
         f"error_rate={g.get('error_rate')} "
-        f"violation_rate={g.get('violation_rate')}"
+        f"violation_rate={g.get('violation_rate')} "
+        f"behavior_accuracy={g.get('behavior_accuracy')}"
     )
-    return 0 if metrics["gates"]["pass"] else 1
+    if not gates_pass:
+        failed = [name for name, ok in checks.items() if not ok]
+        print(
+            f"quality gates failed: {', '.join(failed) or 'unknown'} "
+            f"(report marked FAIL; use --strict-gates for exit 1)"
+        )
+    # Completed runs exit 0 by default so `make` is not a false alarm.
+    # Quality FAIL stays in summary.md / metrics.json; opt into CI via --strict-gates.
+    return 1 if (args.strict_gates and not gates_pass) else 0
 
 
 if __name__ == "__main__":

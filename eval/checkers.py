@@ -147,7 +147,6 @@ def score_case(
     is_error = bool(error) or not str(answer).strip()
     viol = forbidden_hits(answer, raw.get("forbidden") or []) if not is_error else []
     p, r, f1 = product_prf(raw.get("expected_products") or [], predicted_products)
-
     metrics = {
         "id": case.id,
         "split": case.split,

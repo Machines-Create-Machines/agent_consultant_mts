@@ -18,11 +18,15 @@ csv:
 kb:
 	$(PYTHON) -m kb_build
 
+# STRICT=1 → --strict-gates (exit 1 when quality gates FAIL)
+STRICT ?=
+STRICT_FLAG := $(if $(STRICT),--strict-gates,)
+
 eval:
-	$(PYTHON) -m eval --split dev --no-judge $(if $(LIMIT),--limit $(LIMIT),)
+	$(PYTHON) -m eval --split dev --no-judge $(STRICT_FLAG) $(if $(LIMIT),--limit $(LIMIT),)
 
 eval-judge:
-	$(PYTHON) -m eval --split dev $(if $(LIMIT),--limit $(LIMIT),)
+	$(PYTHON) -m eval --split dev $(STRICT_FLAG) $(if $(LIMIT),--limit $(LIMIT),)
 
 pack:
 	@test -f build/chunks.jsonl || $(PYTHON) -m kb_build

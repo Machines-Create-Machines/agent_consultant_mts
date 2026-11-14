@@ -21,7 +21,8 @@ NUGGET_SYSTEM = (
 PAIRWISE_SYSTEM = (
     "Ты судья. Сравни два ответа консультанта на один вопрос клиента. "
     "Критерии: фактическая точность по смыслу, полезность, отсутствие запрещённых обещаний, "
-    "ясность. Ответь строго JSON: {\"winner\":\"A\"|\"B\"|\"tie\",\"reason\":\"...\"}."
+    "ясность. Ответь строго одним JSON-объектом без markdown. "
+    "reason — максимум 20 слов. Формат: {\"winner\":\"A\"|\"B\"|\"tie\",\"reason\":\"...\"}."
 )
 
 
@@ -60,14 +61,32 @@ class JudgeCache:
 
 
 def _parse_json(text: str) -> dict[str, Any]:
+    """Best-effort parse of judge JSON. Tolerates fences and truncated reason strings."""
     text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", text, re.S)
-        if not m:
-            raise
-        return json.loads(m.group(0))
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        # Truncated / prose responses: pull fields we need.
+        recovered: dict[str, Any] = {}
+        mw = re.search(r'"winner"\s*:\s*"?(A|B|tie)"?', text, re.I)
+        if mw:
+            recovered["winner"] = mw.group(1).lower()
+        my = re.search(r'"yes"\s*:\s*(true|false)', text, re.I)
+        if my:
+            recovered["yes"] = my.group(1).lower() == "true"
+        if recovered:
+            return recovered
+        raise
 
 
 def judge_nuggets(
@@ -147,8 +166,11 @@ def _pairwise_once(
         },
     ]
     raw = client.chat(messages, temperature=0)
-    parsed = _parse_json(raw)
-    winner = str(parsed.get("winner", "tie")).lower()
+    try:
+        parsed = _parse_json(raw)
+        winner = str(parsed.get("winner", "tie")).lower()
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        winner = "tie"
     if winner not in {"a", "b", "tie"}:
         winner = "tie"
     cache.set(key, {"winner": winner, "raw": raw})
@@ -247,61 +269,70 @@ def enrich_with_judge(
             row["judge_win_score"] = 0.0
             continue
 
-        nug = judge_nuggets(
-            client,
-            cache,
-            case.raw["question"],
-            answer_text,
-            case.raw.get("nuggets") or [],
-            prompt_version,
-        )
-        row["nugget_recall"] = nug["nugget_recall"]
-        row["nugget_hits"] = "|".join(nug["hits"])
-
-        vs_gold = pairwise_score(
-            client,
-            cache,
-            case.raw["question"],
-            answer_text,
-            case.raw.get("gold_answer") or "",
-            prompt_version,
-            f"gold:{cid}",
-        )
-        row["judge_vs_gold"] = vs_gold
-
-        base = baseline_by_id.get(cid)
-        if base is not None:
-            vs_base = pairwise_score(
+        try:
+            nug = judge_nuggets(
                 client,
                 cache,
                 case.raw["question"],
                 answer_text,
-                base,
+                case.raw.get("nuggets") or [],
                 prompt_version,
-                f"base:{cid}",
             )
-            row["judge_vs_baseline"] = vs_base
-            row["judge_win_score"] = 0.5 * (vs_gold + vs_base)
-        else:
-            row["judge_vs_baseline"] = None
-            row["judge_win_score"] = vs_gold
+            row["nugget_recall"] = nug["nugget_recall"]
+            row["nugget_hits"] = "|".join(nug["hits"])
 
-        if soft_violation_check:
-            soft = soft_violation(
+            vs_gold = pairwise_score(
                 client,
                 cache,
+                case.raw["question"],
                 answer_text,
-                case.raw.get("forbidden") or [],
+                case.raw.get("gold_answer") or "",
                 prompt_version,
+                f"gold:{cid}",
             )
-            row["soft_violation"] = bool(soft)
-            if soft:
-                row["violation"] = True
-                prev = row.get("violation_items") or ""
-                extra = "|".join(soft)
-                row["violation_items"] = "|".join(x for x in [prev, extra] if x)
-        else:
-            row["soft_violation"] = None
+            row["judge_vs_gold"] = vs_gold
+
+            base = baseline_by_id.get(cid)
+            if base is not None:
+                vs_base = pairwise_score(
+                    client,
+                    cache,
+                    case.raw["question"],
+                    answer_text,
+                    base,
+                    prompt_version,
+                    f"base:{cid}",
+                )
+                row["judge_vs_baseline"] = vs_base
+                row["judge_win_score"] = 0.5 * (vs_gold + vs_base)
+            else:
+                row["judge_vs_baseline"] = None
+                row["judge_win_score"] = vs_gold
+
+            if soft_violation_check:
+                soft = soft_violation(
+                    client,
+                    cache,
+                    answer_text,
+                    case.raw.get("forbidden") or [],
+                    prompt_version,
+                )
+                row["soft_violation"] = bool(soft)
+                if soft:
+                    row["violation"] = True
+                    prev = row.get("violation_items") or ""
+                    extra = "|".join(soft)
+                    row["violation_items"] = "|".join(x for x in [prev, extra] if x)
+            else:
+                row["soft_violation"] = None
+        except Exception as exc:
+            # One bad judge call must not kill the run (spec: case isolation).
+            row["nugget_recall"] = row.get("nugget_recall")
+            row["nugget_hits"] = row.get("nugget_hits") or ""
+            row["judge_vs_gold"] = 0.0
+            row["judge_vs_baseline"] = None
+            row["judge_win_score"] = 0.0
+            row["judge_error"] = type(exc).__name__
 
     return rows
 

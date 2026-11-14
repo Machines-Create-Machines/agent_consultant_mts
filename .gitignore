@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+.cursor/
 .eval/
 eval/_cache/
 eval/runs/
