@@ -1,0 +1,78 @@
+# Eval contour defaults — keep weights/gates stable across runs.
+
+dataset_path: questions_dataset.jsonl
+knowledge_base_dir: knowledge-base
+solution_module: solution
+
+# Retrieval / checkers
+k: 5
+max_answer_words: 150
+
+# Splits (deterministic by case id + seed)
+holdout_pct: 30
+split_seed: 42
+
+# Runner
+concurrency: 4
+timeout_sec: 60
+retries: 1
+retry_backoff_sec: 1.0
+isolation: call  # call | subprocess
+
+# Model (same platform model for solution + judge; secrets from env only)
+model:
+  # Env: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL (or PLATFORM_*)
+  temperature: 0
+  max_tokens: 512
+  timeout_sec: 60
+
+# Judge
+judge:
+  enabled_by_default: true
+  cache_dir: eval/_cache/judge
+  prompt_version: "v1"
+  # Rerun tolerance for LLM metrics (absolute)
+  llm_tolerance: 0.05
+  # Soft violation paraphrase check (extra LLM calls). Deterministic match always runs.
+  soft_violation_check: false
+
+# Baseline answers for pairwise (path relative to project root). Optional.
+baseline_answers_path: demo_output.csv
+
+# Composite weights (must sum to 1.0)
+composite_weights:
+  judge_win_rate: 0.30
+  nugget_recall_macro: 0.20
+  behavior_accuracy: 0.15
+  recall_at_k: 0.15
+  product_f1: 0.10
+  speed_score: 0.10
+
+# Gates → run marked FAIL
+gates:
+  error_rate_max: 0.0
+  violation_rate_max: 0.05
+  behavior_accuracy_min: 0.7
+
+# speed_score from latency_p95_ms: 1 at target, 0 at fail (linear clamp)
+speed_score:
+  p95_target_ms: 3000
+  p95_fail_ms: 15000
+
+# Regression significance (ignore smaller absolute deltas as judge noise)
+regression:
+  delta_threshold: 0.03
+  metrics:
+    - composite
+    - judge_win_rate
+    - nugget_recall_macro
+    - behavior_accuracy
+    - recall_at_k
+    - product_f1
+    - speed_score
+    - violation_rate
+    - error_rate
+
+# Failure report
+failures_top_n: 15
+summary_top_issues: 5
