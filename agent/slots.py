@@ -7,7 +7,7 @@ from typing import Any
 
 from agent import config
 from agent.guard import looks_like_name, looks_like_phone
-from agent.types import SlotValue, UnderstandResult
+from agent.schemas import SlotValue, UnderstandResult
 
 _DECLINED = re.compile(
     r"(не\s+знаю|не\s+скажу|просто\s+скажите|без\s+уточнен|неважно)",

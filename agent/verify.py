@@ -8,9 +8,14 @@ from typing import Any
 from agent import config, prompts
 from agent.llm import get_client, model_available
 from agent.store import Store
-from agent.types import GenerateResult, ScoredChunk
+from agent.schemas import GenerateResult, ScoredChunk
 
-_CITE_RE = re.compile(r"\s*\[[\w#.\-/]+\]")
+_CITE_RE = re.compile(r"\s*\[[^\[\]]*\.md#[^\[\]]*\]")
+_MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_MD_HEADING = re.compile(r"^#{1,6}\s*", re.M)
+_MD_BULLET = re.compile(r"^[\-\*]\s+", re.M)
+_MD_HR = re.compile(r"^[\s\-—–]{3,}\s*$", re.M)
+_DASH_RUN = re.compile(r"(?:\s*[-—–]{3,}\s*)+")
 _NUMBER_RE = re.compile(r"\d[\d\s.,]*")
 _TECH_SETUP = re.compile(
     r"(настройте|пропишите\s+адрес|modbus|holding\s+register|прошивк)",
@@ -20,6 +25,23 @@ _TECH_SETUP = re.compile(
 
 def strip_citations(answer: str) -> str:
     return _CITE_RE.sub("", answer or "").strip()
+
+
+def clean_answer(answer: str) -> str:
+    """Strip markdown / table debris for platform judge readability."""
+    text = answer or ""
+    text = strip_citations(text)
+    text = _MD_BOLD.sub(r"\1", text)
+    text = _MD_HEADING.sub("", text)
+    text = _MD_BULLET.sub("", text)
+    text = _MD_HR.sub("", text)
+    text = _DASH_RUN.sub(" ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = text.strip()
+    text = re.sub(r"\s*…\s*$", "", text).strip()
+    return text
 
 
 def _word_count(text: str) -> int:
@@ -134,12 +156,18 @@ def repair(
             ),
         },
     ]
+    before = client.calls
     try:
         data = client.chat_json(
-            messages, temperature=config.P7_TEMP, max_tokens=config.P7_MAX_TOKENS
+            messages,
+            temperature=config.P7_TEMP,
+            max_tokens=config.P7_MAX_TOKENS,
+            stage="P7",
+            max_json_attempts=int(config.MAX_ATTEMPTS.get("P7", 1)),
         )
+        n = max(0, client.calls - before)
         if not data or not data.get("answer"):
-            return result, 1
+            return result, n
         answer = str(data["answer"])
         if _word_count(answer) > config.MAX_ANSWER_WORDS:
             answer = _truncate_words(answer)
@@ -152,7 +180,7 @@ def repair(
                 missing_slot=data.get("missing_slot", result.missing_slot),
                 answer_with_cites=answer,
             ),
-            1,
+            n,
         )
     except Exception:  # noqa: BLE001
-        return result, getattr(client, "calls", 0) or 0
+        return result, max(0, client.calls - before)

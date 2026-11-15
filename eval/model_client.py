@@ -18,14 +18,28 @@ class ModelConfig:
 
 
 def resolve_model_env() -> dict[str, str]:
-    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("PLATFORM_API_KEY") or ""
+    try:
+        from agent.llm import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        pass
+    key = (
+        os.environ.get("LLM_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("PLATFORM_API_KEY")
+        or ""
+    )
     base = (
-        os.environ.get("OPENAI_BASE_URL")
+        os.environ.get("LLM_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
         or os.environ.get("PLATFORM_BASE_URL")
         or "https://api.openai.com/v1"
     )
     model = (
-        os.environ.get("OPENAI_MODEL")
+        os.environ.get("LLM_MODEL")
+        or os.environ.get("OPENAI_MODEL")
+        or os.environ.get("GEN_MODEL")
         or os.environ.get("PLATFORM_MODEL")
         or ""
     )

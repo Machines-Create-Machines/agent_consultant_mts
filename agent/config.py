@@ -35,7 +35,7 @@ FUSION_WEIGHTS = {
 
 MMR_LAMBDA = 0.7
 FUSE_TOP_N = 25
-RERANK_TOP_N = 6
+RERANK_TOP_N = 12
 RETRIEVE_K = {
     "pricing": 6,
     "product_consult": 8,
@@ -49,17 +49,21 @@ MAX_ANSWER_WORDS = 150
 CLARIFY_STREAK_MAX = 2
 LEAD_FIELD_ATTEMPTS = 2
 
-LLM_TIMEOUT_SEC = 4.0  # fail-fast; dead PLATFORM API must not hang CSV smoke
-LLM_CONNECT_TIMEOUT_SEC = 2.0
-LLM_RETRIES = 0  # no retries; first connectivity/timeout failure trips process circuit
-# Process-level: after trip, skip all further LLM calls until process exit (no reopen).
-LLM_CIRCUIT_COOLDOWN_SEC = 0.0
-GLOBAL_BUDGET_SEC = 8.0
+# Per-request urllib safety only — no per-case wall-clock budget.
+LLM_TIMEOUT_SEC = 120.0
+LLM_CONNECT_TIMEOUT_SEC = 10.0
+LLM_RETRIES = 1
+# Trip circuit only on hard connect failures (not read timeouts).
+LLM_CIRCUIT_COOLDOWN_SEC = 60.0
+# Concurrent HTTP to LLM/embeddings across workers.
+LLM_HTTP_CONCURRENCY = 2
+# Logical attempt caps per case (not HTTP retries).
+MAX_ATTEMPTS = {"P5": 1, "P6": 1, "P7": 1}
 
 P5_TEMP = 0.1
 P5_MAX_TOKENS = 300
 P6_TEMP = 0.2
-P6_MAX_TOKENS = 600
+P6_MAX_TOKENS = 900
 P7_TEMP = 0.0
 P7_MAX_TOKENS = 600
 P8_TEMP = 0.2

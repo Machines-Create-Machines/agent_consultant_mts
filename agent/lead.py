@@ -10,7 +10,7 @@ from agent import config, prompts, templates
 from agent.guard import looks_like_name, looks_like_phone
 from agent.llm import get_client, model_available
 from agent.slots import slot_state
-from agent.types import SlotValue
+from agent.schemas import SlotValue
 
 _PHONE_RE = re.compile(
     r"(?:\+?7|8)[\s\-]?(?:\(?\d{3}\)?[\s\-]?)?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}"

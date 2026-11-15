@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 
 from agent import config
-from agent.types import Aspect, ScoredChunk, UnderstandResult
+from agent.schemas import Aspect, ScoredChunk, UnderstandResult
 
 ATTR_TERMS = {
     "цена": ["цена", "стоимость", "тариф", "руб", "₽", "прайс", "оплата"],

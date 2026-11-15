@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     if judge_enabled and not model_available():
         print(
             "WARNING: LLM env not set; continuing with --no-judge. "
-            "Set OPENAI_API_KEY + OPENAI_MODEL for full judge run.",
+            "Set LLM_API_KEY + LLM_MODEL (or OPENAI_* / PLATFORM_*) for a full judge run.",
             file=sys.stderr,
         )
         judge_enabled = False

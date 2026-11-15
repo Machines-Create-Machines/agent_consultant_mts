@@ -3,10 +3,9 @@ PYTHON ?= python3
 .PHONY: ask csv kb eval eval-judge pack
 
 IN ?= data/demo_questions.csv
-OUT ?= answers.csv
+OUT ?= submission.csv
 LIMIT ?=
 DIST := dist
-STAGE := $(DIST)/stage
 
 ask:
 	@test -n "$(Q)" || { echo 'Usage: make ask Q="your question"'; exit 1; }
@@ -30,11 +29,4 @@ eval-judge:
 
 pack:
 	@test -f build/chunks.jsonl || $(PYTHON) -m kb_build
-	rm -rf $(STAGE)
-	mkdir -p $(STAGE)/agent $(STAGE)/build
-	cp solution.py requirements.txt $(STAGE)/
-	cp agent/*.py $(STAGE)/agent/
-	cp build/chunks.jsonl build/cards.jsonl build/glossary.json build/id_aliases.json $(STAGE)/build/
-	rm -f $(DIST)/solution.zip
-	cd $(STAGE) && zip -r ../solution.zip solution.py requirements.txt agent build
-	@echo "wrote $(DIST)/solution.zip"
+	$(PYTHON) scripts/pack_flat.py

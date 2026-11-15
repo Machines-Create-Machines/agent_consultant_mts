@@ -5,7 +5,7 @@ from __future__ import annotations
 from agent import config
 from agent.retrieve import _minmax
 from agent.store import Store, tokenize
-from agent.types import ScoredChunk
+from agent.schemas import ScoredChunk
 
 
 def fuse(

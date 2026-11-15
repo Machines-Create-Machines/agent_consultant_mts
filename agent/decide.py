@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent.clarity import ClarityResult, worth_asking
 from agent.coverage import CoverageResult
-from agent.types import Decision, SlotValue, UnderstandResult
+from agent.schemas import Decision, SlotValue, UnderstandResult
 
 
 def decide(

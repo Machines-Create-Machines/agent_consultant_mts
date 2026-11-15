@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agent import templates
-from agent.types import UnderstandResult
+from agent.schemas import UnderstandResult
 
 
 @dataclass
@@ -27,6 +27,16 @@ def route(
         return Route(action="off_topic", answer=templates.OFF_TOPIC, reason="off_topic")
     if intent == "greeting":
         return Route(action="greeting", answer=templates.GREETING, reason="greeting")
-    if lead_active or understand.lead_signal or intent == "lead_intent":
+    # Do not hijack pricing/product Q&A on a soft lead_signal alone.
+    consult_intents = {
+        "pricing",
+        "product_consult",
+        "task_diagnosis",
+        "comparison",
+        "other",
+    }
+    if lead_active or intent == "lead_intent":
         return Route(action="lead", reason="lead")
+    if understand.lead_signal and intent not in consult_intents:
+        return Route(action="lead", reason="lead_signal")
     return Route(action="search", reason="search")

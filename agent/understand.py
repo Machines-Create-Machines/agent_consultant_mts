@@ -8,11 +8,11 @@ from typing import Any
 from agent import config, prompts
 from agent.llm import get_client
 from agent.slots import parse_slot_delta
-from agent.types import Aspect, UnderstandResult
+from agent.schemas import Aspect, UnderstandResult
 
 _OOS = re.compile(
     r"(modbus|настро(ить|йка)|конфигур|прошивк|схем[аы]\s+подключ|"
-    r"монтаж|ремонт|адрес\s+сч[её]тчик|регистр[аы]\s+сч)",
+    r"ремонт|адрес\s+сч[её]тчик|регистр[аы]\s+сч)",
     re.I,
 )
 _PRICING = re.compile(r"(скольк\w*\s+сто(ит|ят)|цена|стоимость|прайс|тариф)", re.I)
@@ -95,12 +95,18 @@ def _from_dict(data: dict[str, Any], question: str) -> UnderstandResult:
     )
 
 
-def fallback_understand(question: str) -> UnderstandResult:
+def fallback_understand(question: str, history: list[dict] | None = None) -> UnderstandResult:
     intent = _keyword_intent(question)
+    prior = [
+        str(t.get("content") or "").strip()
+        for t in (history or [])[-4:]
+        if (t.get("role") or "") == "user" and str(t.get("content") or "").strip()
+    ]
+    standalone = " ".join(prior + [question]).strip() or question
     return UnderstandResult(
         intent=intent,
         out_of_scope=intent == "out_of_scope_tech",
-        standalone_query=question,
+        standalone_query=standalone,
         query_variants=[],
         entities=[],
         aspects=_default_aspects(question),
@@ -129,20 +135,26 @@ def understand(
     if skip_llm is not None:
         use_llm = not skip_llm
     if not use_llm:
-        return fallback_understand(question), 0
+        return fallback_understand(question, history), 0
     client = get_client()
     if client is None:
-        return fallback_understand(question), 0
+        return fallback_understand(question, history), 0
     messages = [
         {"role": "system", "content": prompts.P5_SYSTEM},
         {"role": "user", "content": prompts.p5_user(history, products, question)},
     ]
+    before = client.calls
     try:
         data = client.chat_json(
-            messages, temperature=config.P5_TEMP, max_tokens=config.P5_MAX_TOKENS
+            messages,
+            temperature=config.P5_TEMP,
+            max_tokens=config.P5_MAX_TOKENS,
+            stage="P5",
+            max_json_attempts=int(config.MAX_ATTEMPTS.get("P5", 2)),
         )
+        n = max(0, client.calls - before)
         if not data:
-            return fallback_understand(question), max(client.calls, 1)
-        return _from_dict(data, question), 1
+            return fallback_understand(question, history), n
+        return _from_dict(data, question), n
     except Exception:  # noqa: BLE001
-        return fallback_understand(question), 0
+        return fallback_understand(question, history), max(0, client.calls - before)

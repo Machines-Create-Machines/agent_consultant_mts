@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agent import config
-from agent.types import Card, Chunk
+from agent.schemas import Card, Chunk
 
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.I)
 _LOCK = threading.RLock()
@@ -299,11 +299,14 @@ def _load_dense(build_dir: Path, store: Store) -> None:
     except ImportError:
         return
     try:
-        emb = np.load(str(npy), mmap_mode="r")
+        emb = np.asarray(np.load(str(npy)), dtype=np.float32)
         ids = json.loads(ids_path.read_text(encoding="utf-8"))
         if len(ids) != len(emb):
             return
-        store.embeddings = emb
+        # Ensure L2 rows (float16 roundtrip / older indexes)
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        store.embeddings = emb / norms
         store.embedding_ids = list(ids)
         store.emb_index = {cid: i for i, cid in enumerate(store.embedding_ids)}
     except Exception:  # noqa: BLE001

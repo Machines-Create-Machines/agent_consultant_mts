@@ -7,7 +7,7 @@ from typing import Any
 
 from agent import config
 from agent.store import Store, tokenize
-from agent.types import Card, UnderstandResult
+from agent.schemas import Card, UnderstandResult
 
 
 def _minmax(scores: dict[str, float]) -> dict[str, float]:
@@ -20,17 +20,51 @@ def _minmax(scores: dict[str, float]) -> dict[str, float]:
     return {k: (v - lo) / (hi - lo) for k, v in scores.items()}
 
 
+# Lexical expansions for phrasings the glossary does not cover.
+_QUERY_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("симк", "сим-карт", "sim"), "облачная платформа учёта АСКУЭ передача данных"),
+    (("кабинет", "цех", "цеха"), "технический учёт АСКУЭ платформа магазины"),
+    (("фасад", "скат", "кровл", "крыш"), "солнечные панели электростанция"),
+)
+
+
+def expand_query(query: str) -> str:
+    low = (query or "").lower().replace("ё", "е")
+    extras = [hint for keys, hint in _QUERY_HINTS if any(k in low for k in keys)]
+    if not extras:
+        return query
+    return query + " " + " ".join(extras)
+
+
 def _dense_scores(store: Store, query: str, top: int) -> dict[str, float]:
     if store.embeddings is None or not store.embedding_ids:
         return {}
     try:
         import numpy as np  # type: ignore
+
+        from agent.llm import embed_query
     except ImportError:
         return {}
-    # No query embedding API locally — lexical proxy via bag-of-words on text_ctx
-    # when dense query vectors unavailable. Skip silent.
-    _ = (np, query, top)
-    return {}
+    vec = embed_query(query)
+    if not vec:
+        return {}
+    # Query is L2-normalized in embed_query; index rows L2-normalized at build.
+    # Cosine == dot product.
+    q = np.asarray(vec, dtype=np.float32)
+    mat = np.asarray(store.embeddings, dtype=np.float32)
+    if q.ndim != 1 or mat.ndim != 2 or q.shape[0] != mat.shape[1]:
+        return {}
+    qn = float(np.linalg.norm(q)) or 1.0
+    q = q / qn
+    mn = np.linalg.norm(mat, axis=1, keepdims=True)
+    mn = np.where(mn == 0, 1.0, mn)
+    mat_n = mat / mn
+    sims = mat_n @ q
+    k = min(top, sims.shape[0])
+    if k <= 0:
+        return {}
+    idx = np.argpartition(-sims, k - 1)[:k]
+    return {store.embedding_ids[int(i)]: float(sims[int(i)]) for i in idx if float(sims[int(i)]) > 0.0}
 
 
 def _card_alias_hits(store: Store, query: str) -> list[tuple[Card, float]]:
@@ -139,9 +173,16 @@ def retrieve(
     slots: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return per-branch chunk_id -> raw score."""
-    _ = slots  # reserved for soft boosts
-    q0 = understand.standalone_query or ""
-    variants = [q0] + list(understand.query_variants or [])
+    q0 = expand_query(understand.standalone_query or "")
+    slot_bits: list[str] = []
+    for val in (slots or {}).values():
+        if isinstance(val, dict):
+            val = val.get("value")
+        if val:
+            slot_bits.append(str(val))
+    if slot_bits:
+        q0 = q0 + " " + " ".join(slot_bits)
+    variants = [q0] + [expand_query(v) for v in (understand.query_variants or [])]
     # merge BM25 over variants (max)
     bm25: dict[str, float] = {}
     dense: dict[str, float] = {}

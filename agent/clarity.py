@@ -7,7 +7,7 @@ from typing import Any
 
 from agent import config
 from agent.slots import clarify_streak, declined_slots
-from agent.types import SlotValue, UnderstandResult
+from agent.schemas import SlotValue, UnderstandResult
 
 VALUE = {"stated": 1.0, "inferred": 0.6, "conflict": 0.0, "missing": 0.0}
 

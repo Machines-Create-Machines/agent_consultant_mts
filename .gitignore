@@ -11,4 +11,6 @@ eval/runs/
 build/
 dist/
 answers.csv
+submission.csv
+questions.csv
 *.zip
