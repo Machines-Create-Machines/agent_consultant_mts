@@ -126,6 +126,7 @@ def retrieve(
     understand: UnderstandResult | PlannerResult,
     *,
     slots: dict[str, Any] | None = None,
+    skip_dense: bool = False,
 ) -> dict[str, dict[str, float]]:
     del slots
     q0 = getattr(understand, "standalone_query", "") or ""
@@ -149,7 +150,7 @@ def retrieve(
         for cid, sc in extra.items():
             cards[cid] = max(cards.get(cid, 0.0), sc)
     return {
-        "dense": branch_b_dense(store, q0),
+        "dense": {} if skip_dense else branch_b_dense(store, q0),
         "bm25": branch_c_bm25(store, q0),
         "cards": cards,
         "questions": branch_questions(store, q0),

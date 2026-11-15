@@ -220,6 +220,8 @@ def understand(
     fb = fallback_understand(question, history)
     if skip_llm is not None:
         use_llm = not skip_llm
+    if not getattr(config, "PLANNER_LLM", True):
+        use_llm = False
     # Fast path: obvious catalog / named-product / comparison don't need P5.
     if fb.route != "consult" or fb.consult_intent == "catalog":
         return fb, 0

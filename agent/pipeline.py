@@ -1,4 +1,4 @@
-"""Consultant v4 orchestrator: planner → doc-first context → writer."""
+"""Consultant orchestrator: guard/lead + full-KB writer."""
 
 from __future__ import annotations
 
@@ -344,15 +344,17 @@ def _cycle(
     scope = "catalog_overview" if intent == "catalog" else "specific"
     stages["query_scope"] = scope
     t = time.perf_counter()
-    branches = retrieve(store, u, slots=None)
+    full_kb = bool(getattr(config, "FULL_KB", False))
+    branches = retrieve(store, u, slots=None, skip_dense=full_kb)
     ranked = fuse(store, branches, diversify_products=(intent == "catalog"))
     stages["retrieve_ms"] = round((time.perf_counter() - t) * 1000, 1)
-    stages["has_dense"] = bool(getattr(store, "embeddings", None) is not None)
+    stages["has_dense"] = bool(getattr(store, "embeddings", None) is not None) and not full_kb
+    stages["full_kb"] = full_kb
 
     used_rerank = False
     t = time.perf_counter()
     top_n = max(intent_k(u.intent), 12 if intent == "catalog" else intent_k(u.intent))
-    do_rerank = not skip_rerank and should_rerank(u, ranked)
+    do_rerank = (not full_kb) and (not skip_rerank) and should_rerank(u, ranked)
     if do_rerank:
         ranked, used_rerank = rerank(u.standalone_query, ranked, top_n=top_n)
     else:
@@ -376,6 +378,8 @@ def _cycle(
         n_products=len(pack.products) if intent != "catalog" else len(store.product_names),
     )
     if intent == "catalog" and store.cards:
+        decision = "answer"
+    if full_kb and (pack.blocks or getattr(store, "kb_prompt", "")):
         decision = "answer"
     stages["decision"] = decision
     stages["coverage"] = (
@@ -415,6 +419,7 @@ def _cycle(
     if (
         needs_repair(violations)
         and not skip_llm
+        and not full_kb
         and model_available()
         and int(config.MAX_ATTEMPTS.get("P7", 0) or 0) >= 1
     ):

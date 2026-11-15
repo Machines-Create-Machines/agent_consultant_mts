@@ -87,6 +87,8 @@ class Store:
     emb_index: dict[str, int] = field(default_factory=dict)
     documents: dict[str, Document] = field(default_factory=dict)
     dossiers: list[dict[str, Any]] = field(default_factory=list)
+    kb_prompt: str = ""
+    kb_section_ids: list[str] = field(default_factory=list)
     db_path: Path | None = None
 
     def get_chunk(self, chunk_id: str) -> Chunk | None:
@@ -400,6 +402,11 @@ def _build_from_jsonl(build_dir: Path) -> Store:
     store.q_chunk_map = q_map
 
     _load_dense(build_dir, store)
+    from agent.corpus import format_full_kb
+
+    store.kb_prompt, store.kb_section_ids = format_full_kb(store)
+    if len(store.kb_prompt) > config.MAX_KB_CHARS:
+        store.kb_prompt = store.kb_prompt[: config.MAX_KB_CHARS]
     return store
 
 

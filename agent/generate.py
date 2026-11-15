@@ -7,6 +7,7 @@ from typing import Any
 
 from agent import config, prompts, templates
 from agent.context import cards_text as cards_overview
+from agent.corpus import all_chunks_as_scored
 from agent.llm import get_client, model_available
 from agent.schemas import (
     ContextPack,
@@ -30,15 +31,18 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _WS = re.compile(r"\s+")
 
 
-def format_sources(pack: ContextPack) -> str:
+def format_sources(pack: ContextPack, store: Store | None = None) -> str:
+    if getattr(config, "FULL_KB", False) and store is not None and getattr(store, "kb_prompt", ""):
+        return store.kb_prompt
     blocks: list[str] = []
     total = 0
+    budget = config.MAX_KB_CHARS if getattr(config, "FULL_KB", False) else config.MAX_EVIDENCE_CHARS
     for b in pack.blocks:
         text = (b.text or "").strip()
         if not text:
             continue
         chunk = f"[{b.chunk_id}] {b.heading}\n{text}"
-        if total + len(chunk) > config.MAX_EVIDENCE_CHARS and blocks:
+        if total + len(chunk) > budget and blocks:
             break
         blocks.append(chunk)
         total += len(chunk)
@@ -261,7 +265,7 @@ def _parse_sentences(data: dict[str, Any]) -> GenerateResult:
                 continue
             texts.append(t)
             for c in item.get("citations") or []:
-                cs = str(c).strip()
+                cs = str(c).strip().strip("{}").removeprefix("id=").strip()
                 if cs and cs not in cites:
                     cites.append(cs)
         answer = " ".join(texts)
@@ -310,12 +314,12 @@ def generate(
     ranked: list[ScoredChunk] | None = None,
 ) -> tuple[GenerateResult, str, list[ScoredChunk], int]:
     del slots, ranked
-    evidence_blocks = format_sources(pack)
-    used = pack_as_scored(pack)
+    evidence_blocks = format_sources(pack, store)
+    used = all_chunks_as_scored(store) if getattr(config, "FULL_KB", False) else pack_as_scored(pack)
     q = getattr(understand, "standalone_query", "") or ""
     intent = getattr(understand, "consult_intent", None) or pack.intent or "energy_fact"
 
-    if skip_llm or not model_available() or not pack.blocks:
+    if skip_llm or not model_available() or not (pack.blocks or evidence_blocks):
         fb = synthetic_answer(store, understand, pack)
         return fb, evidence_blocks, used, 0
 
