@@ -1,9 +1,13 @@
+from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from api.router_page import page_router
 from api.router_dialog import dialog_router
+from api.router_ws import ws_router
 from auth.user import router
-import logging
 
 # Загружаем .env до импорта остальных модулей (в Docker переменные
 # приходят через env_file/docker-compose, поэтому отсутствие .env не ошибка)
@@ -16,7 +20,21 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Medical Support")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from services.agent_bridge import cold_start
+
+        cold_start()
+    except Exception:
+        logger.exception(
+            "Agent KB cold_start failed; /ws/chat will use fallback until KB is available"
+        )
+    yield
+
+
+app = FastAPI(title="Medical Support", lifespan=lifespan)
 
 origins = [
     "http://localhost:8080",
@@ -27,6 +45,7 @@ origins = [
 
 app.include_router(page_router)
 app.include_router(dialog_router)
+app.include_router(ws_router)
 app.include_router(router)
 
 app.add_middleware(

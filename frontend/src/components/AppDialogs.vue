@@ -1,4 +1,8 @@
 <script>
+const WS_RECONNECT_BASE_MS = 1000;
+const WS_RECONNECT_MAX_MS = 30000;
+const WS_PING_INTERVAL_MS = 25000;
+
 export default {
   name: "AppDialogs",
   props: {
@@ -14,6 +18,13 @@ export default {
       input: "",
       loading: false,
       error: "",
+      ws: null,
+      wsReady: false,
+      wsStatus: "connecting", // connecting | online | offline
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      pingTimer: null,
+      intentionalClose: false,
     };
   },
   computed: {
@@ -24,12 +35,216 @@ export default {
   created() {
     this.loadDialogs();
   },
+  mounted() {
+    this.connectWs();
+  },
+  beforeUnmount() {
+    this.closeWs();
+  },
   methods: {
     authHeaders() {
       return {
         Authorization: this.token_type + " " + this.access_token,
         "Content-Type": "application/json",
       };
+    },
+    wsChatUrl() {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const token = encodeURIComponent(this.access_token);
+      return `${proto}//${window.location.host}/ws/chat?token=${token}`;
+    },
+    connectWs() {
+      if (!this.access_token) return;
+      this.clearReconnectTimer();
+      this.clearPingTimer();
+      this.intentionalClose = false;
+
+      if (this.ws) {
+        try {
+          this.ws.onopen = null;
+          this.ws.onmessage = null;
+          this.ws.onerror = null;
+          this.ws.onclose = null;
+          this.ws.close();
+        } catch (_) {
+          /* ignore */
+        }
+        this.ws = null;
+      }
+
+      this.wsStatus = "connecting";
+      const socket = new WebSocket(this.wsChatUrl());
+      this.ws = socket;
+      this.wsReady = false;
+
+      socket.onopen = () => {
+        this.reconnectAttempt = 0;
+        this.startPing();
+      };
+
+      socket.onmessage = (ev) => {
+        this.handleWsMessage(ev);
+      };
+
+      socket.onerror = () => {
+        // onclose handles reconnect; keep UI quiet unless send fails
+      };
+
+      socket.onclose = () => {
+        this.wsReady = false;
+        this.wsStatus = "offline";
+        this.loading = false;
+        this.clearPingTimer();
+        if (this.ws === socket) this.ws = null;
+        if (!this.intentionalClose) this.scheduleReconnect();
+      };
+    },
+    closeWs() {
+      this.intentionalClose = true;
+      this.clearReconnectTimer();
+      this.clearPingTimer();
+      this.wsReady = false;
+      this.wsStatus = "offline";
+      this.loading = false;
+      if (this.ws) {
+        try {
+          this.ws.close();
+        } catch (_) {
+          /* ignore */
+        }
+        this.ws = null;
+      }
+    },
+    scheduleReconnect() {
+      this.clearReconnectTimer();
+      this.wsStatus = "connecting";
+      const delay = Math.min(
+        WS_RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt),
+        WS_RECONNECT_MAX_MS
+      );
+      this.reconnectAttempt += 1;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.connectWs();
+      }, delay);
+    },
+    clearReconnectTimer() {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+    },
+    startPing() {
+      this.clearPingTimer();
+      this.pingTimer = setInterval(() => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, WS_PING_INTERVAL_MS);
+    },
+    clearPingTimer() {
+      if (this.pingTimer) {
+        clearInterval(this.pingTimer);
+        this.pingTimer = null;
+      }
+    },
+    handleWsMessage(ev) {
+      let data;
+      try {
+        data = JSON.parse(ev.data);
+      } catch (_) {
+        return;
+      }
+      const type = data && data.type;
+      if (!type) return;
+
+      switch (type) {
+        case "ready":
+          this.wsReady = true;
+          this.wsStatus = "online";
+          this.error = "";
+          break;
+        case "dialog": {
+          const dialog = this.normalizeDialogFrame(data);
+          if (dialog && dialog.id) {
+            this.activeDialogId = dialog.id;
+            const idx = this.dialogs.findIndex((d) => d.id === dialog.id);
+            if (idx >= 0) {
+              this.dialogs.splice(idx, 1, { ...this.dialogs[idx], ...dialog });
+            } else {
+              this.dialogs.unshift(dialog);
+            }
+          }
+          break;
+        }
+        case "user_message": {
+          const msg = this.normalizeMessageFrame(data);
+          if (msg && msg.id != null) {
+            if (!this.messages.some((m) => m.id === msg.id)) {
+              this.messages.push(msg);
+            }
+            this.scrollMessages();
+          }
+          break;
+        }
+        case "assistant_message": {
+          const msg = this.normalizeMessageFrame(data);
+          if (msg && msg.id != null) {
+            if (!this.messages.some((m) => m.id === msg.id)) {
+              this.messages.push(msg);
+            }
+            this.scrollMessages();
+            this.loadDialogs();
+          }
+          break;
+        }
+        case "status": {
+          const state = data.state;
+          if (state === "thinking") {
+            this.loading = true;
+          } else if (state === "done") {
+            this.loading = false;
+          }
+          break;
+        }
+        case "error":
+          this.error = (data.detail && String(data.detail)) || "Ошибка чата";
+          this.loading = false;
+          break;
+        case "pong":
+          break;
+        default:
+          break;
+      }
+    },
+    normalizeDialogFrame(data) {
+      const src = data.dialog && typeof data.dialog === "object" ? data.dialog : data;
+      if (!src || src.id == null) return null;
+      return {
+        id: src.id,
+        title: src.title,
+        created_at: src.created_at,
+        messages_count: src.messages_count,
+        updated_at: src.updated_at,
+      };
+    },
+    normalizeMessageFrame(data) {
+      const src = data.message && typeof data.message === "object" ? data.message : data;
+      if (!src || src.id == null) return null;
+      return {
+        id: src.id,
+        role: src.role,
+        content: src.content,
+        documents: src.documents || null,
+        created_at: src.created_at,
+        dialog_id: src.dialog_id,
+      };
+    },
+    scrollMessages() {
+      this.$nextTick(() => {
+        const box = this.$refs.msgbox;
+        if (box) box.scrollTop = box.scrollHeight;
+      });
     },
     fmtTime(iso) {
       if (!iso) return "";
@@ -84,6 +299,7 @@ export default {
         });
         if (!res.ok) throw new Error(await res.text());
         this.messages = await res.json();
+        this.scrollMessages();
       } catch (e) {
         this.error = "Не удалось загрузить сообщения";
       }
@@ -105,59 +321,26 @@ export default {
         this.error = "Не удалось удалить диалог";
       }
     },
-    async send() {
+    send() {
       const text = this.input.trim();
       if (!text || this.loading) return;
-      
-      this.loading = true;
-      this.error = "";
 
-      try {
-        // Если диалог еще не создан в базе (activeDialogId === null), создаем его прямо сейчас
-        if (!this.activeDialogId) {
-          const res = await fetch(this.du + "/dialogs", {
-            method: "POST",
-            headers: this.authHeaders(),
-          });
-          if (!res.ok) throw new Error(await res.text());
-          
-          const dialog = await res.json();
-          this.dialogs.unshift(dialog); // Добавляем в список слева
-          this.activeDialogId = dialog.id; // Запоминаем ID нового диалога
-        }
-
-        // Теперь отправляем сообщение в уже существующий (или только что созданный) диалог
-        const resMsg = await fetch(
-          this.du + "/dialogs/" + this.activeDialogId + "/messages",
-          {
-            method: "POST",
-            headers: this.authHeaders(),
-            body: JSON.stringify({ content: text }),
-          }
-        );
-        
-        if (!resMsg.ok) throw new Error(await resMsg.text());
-        
-        const msg = await resMsg.json();
-        this.messages.push(msg);
-        this.input = ""; // Очищаем поле ввода
-        
-        // Обновляем список слева, чтобы подтянулся заголовок (title) диалога
-        await this.loadDialogs();
-        
-        // Прокручиваем вниз
-        this.$nextTick(() => {
-          const box = this.$refs.msgbox;
-          if (box) box.scrollTop = box.scrollHeight;
-        });
-      } catch (e) {
-        this.error = "Не удалось создать диалог или отправить сообщение";
-        console.error(e);
-      } finally {
-        this.loading = false;
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.wsReady) {
+        this.error = "Нет соединения с чатом. Подождите или обновите страницу.";
+        return;
       }
-    }
-    ,
+
+      this.error = "";
+      this.input = "";
+
+      this.ws.send(
+        JSON.stringify({
+          type: "user_message",
+          dialog_id: this.activeDialogId,
+          content: text,
+        })
+      );
+    },
     docTitles(documents) {
       if (!documents || !documents.length) return [];
       return documents.map((d) => d.title || d.id_cr || JSON.stringify(d));
@@ -172,13 +355,23 @@ export default {
       <button type="button" class="new-dialog-btn" @click="newDialog">
         Начать новый диалог
       </button>
+      <p class="ws-status" :class="wsStatus">
+        {{
+          wsStatus === "online"
+            ? "Чат подключён"
+            : wsStatus === "connecting"
+              ? "Подключение к чату…"
+              : "Нет связи с чатом, переподключение…"
+        }}
+      </p>
       <ul>
         <li
           v-for="d in dialogs"
           :key="d.id"
           :class="{ active: d.id === activeDialogId }"
+          @click="openDialog(d.id)"
         >
-          <span class="dialog-title" @click="openDialog(d.id)">
+          <span class="dialog-title">
             {{ d.title }}
             <small>{{ d.messages_count }} сообщ.</small>
           </span>
@@ -186,7 +379,7 @@ export default {
             type="button"
             class="del-btn"
             title="Удалить диалог"
-            @click="removeDialog(d.id)"
+            @click.stop="removeDialog(d.id)"
           >
             ✕
           </button>
@@ -203,7 +396,7 @@ export default {
         <span class="created">Создан: {{ fmtTime(activeDialog.created_at) }}</span>
       </header>
       <div ref="msgbox" class="messages">
-        <p v-if="!activeDialog" class="hint">
+        <p v-if="!activeDialog && !messages.length" class="hint">
           Выберите диалог слева или начните новый.
         </p>
         <div
@@ -221,6 +414,7 @@ export default {
             </ul>
           </div>
         </div>
+        <p v-if="loading" class="thinking">Ассистент думает…</p>
       </div>
       <div class="input-row">
         <textarea
@@ -363,6 +557,12 @@ export default {
   margin: 2px 0 0;
   padding-left: 18px;
 }
+.thinking {
+  align-self: flex-start;
+  color: #666;
+  font-style: italic;
+  margin: 4px 0;
+}
 .input-row {
   display: flex;
   gap: 8px;
@@ -385,5 +585,23 @@ export default {
 .error {
   color: #c00;
   margin: 0 8px;
+}
+.ws-status {
+  font-size: 0.8em;
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.ws-status.online {
+  color: #1b7a3d;
+  background: #e8f7ee;
+}
+.ws-status.connecting {
+  color: #8a6d00;
+  background: #fff6d6;
+}
+.ws-status.offline {
+  color: #a11;
+  background: #ffe8e8;
 }
 </style>

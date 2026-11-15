@@ -18,9 +18,8 @@ services:
 
   init-db:
     build:
-      # Теперь сборка идет из папки backend
-      context: ./backend
-      dockerfile: Dockerfile.backend
+      context: .
+      dockerfile: backend/Dockerfile.backend
     command: ["python", "db/init_db.py"]
     env_file: .env
     environment:
@@ -32,12 +31,12 @@ services:
 
   backend:
     build:
-      # Теперь сборка идет из папки backend
-      context: ./backend
-      dockerfile: Dockerfile.backend
+      context: .
+      dockerfile: backend/Dockerfile.backend
     env_file: .env
     environment:
       DB_HOST: db
+      PYTHONPATH: /app
     ports:
       - "8002:8002"
     depends_on:

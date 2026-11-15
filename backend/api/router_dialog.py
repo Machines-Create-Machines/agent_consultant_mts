@@ -43,10 +43,10 @@ async def get_messages(dialog_id: str, current_user=Depends(require_authenticate
 @dialog_router.post("/{dialog_id}/messages")
 async def add_message(dialog_id: str, body: MessageIn,
                     current_user=Depends(require_authenticated_user)):
-    """Добавить сообщение пользователя в диалог.
+    """Добавить сообщение пользователя в диалог (только запись в БД).
 
-    Здесь же пользователь «задаёт вопрос»; ответ LLM будет добавляться
-    отдельным вызовом (см. /messages/assistant) после подключения LLM.
+    Чат с агентом идёт через WebSocket /ws/chat; этот эндпоинт —
+    legacy/отладка без вызова LLM.
     """
     return DialogService.add_user_message(dialog_id, body.content, current_user)
 
@@ -54,8 +54,7 @@ async def add_message(dialog_id: str, body: MessageIn,
 @dialog_router.post("/{dialog_id}/messages/assistant")
 async def add_assistant_message(dialog_id: str, body: AssistantMessageIn,
                                 current_user=Depends(require_authenticated_user)):
-    """Служебный эндпоинт для будущего модуля LLM: сохранить ответ
-    вместе со списком использованных документов."""
+    """Сохранить ответ ассистента и documents (без вызова агента)."""
     return DialogService.add_assistant_message(
         dialog_id, body.content, body.documents, current_user)
 

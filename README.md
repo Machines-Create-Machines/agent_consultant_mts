@@ -1,6 +1,6 @@
 ```markdown 
 Фронтенд написан на Vue.js, бэкенд — на FastAPI, база данных — PostgreSQL. 
-В приложении реализована авторизация, личный кабинет пользователя, а также интерактивный чат (диалоги) для общения с ИИ-ассистентом.
+В приложении реализована авторизация, личный кабинет пользователя, а также интерактивный чат (диалоги) для общения с ИИ-ассистентом EnergyTool через WebSocket.
 ```
 
 ## Запуск через Docker (рекомендуемый способ)
@@ -9,49 +9,75 @@
 
    ```bash
    cp .env.example .env
-   # задайте DB_PASSWORD и JWT_SECRET (например: openssl rand -hex 32)
+   # задайте JWT_SECRET, DB_PASSWORD
+   # и PLATFORM_API_KEY / PLATFORM_BASE_URL / PLATFORM_MODEL (или LLM_*)
    ```
 
-2. Соберите и запустите всё одной командой:
+2. Соберите KB (если ещё нет `build/chunks.jsonl`):
 
    ```bash
-   docker compose up --build
+   make kb
    ```
 
-   Поднимутся сервисы:
-   - `db` — PostgreSQL (таблицы создаются автоматически из `db/init.sql`);
-   - `init-db` — разовая инициализация данных;
-   - `backend` — FastAPI, http://localhost:8002 (Swagger: http://localhost:8002/docs);
-   - `frontend` — Vue-приложение за nginx, **http://localhost:8080** (запросы к API проксируются через `/api`).
+3. Поднимите стек:
 
-3. Остановка: `docker compose down` (данные БД сохраняются в volume `pgdata`; полная очистка с удалением данных — `docker compose down -v`).
+   ```bash
+   make up
+   # или: docker compose up --build
+   ```
+
+   Сервисы:
+   - `db` — PostgreSQL;
+   - `init-db` — разовая инициализация;
+   - `backend` — FastAPI + agent KB, http://localhost:8002 (Swagger: http://localhost:8002/docs);
+   - `frontend` — Vue за nginx, **http://localhost:8080** (`/api` и `/ws` проксируются на backend).
+
+4. Логи / остановка:
+
+   ```bash
+   make logs
+   make down
+   # полная очистка volume: docker compose down -v
+   ```
+
+5. Smoke агента без UI:
+
+   ```bash
+   make ask Q="Какие тарифы на АСКУЭ?"
+   ```
+
+### Чат с агентом (WebSocket)
+
+- UI на http://localhost:8080 открывает **`/ws/chat?token=<access_token>`** (через nginx → backend).
+- Прямой backend: `ws://localhost:8002/ws/chat?token=<JWT>`.
+- Протокол: после `ready` клиент шлёт `user_message` `{dialog_id, content}`; сервер отвечает кадрами `dialog` (если новый), `user_message`, `status` (`thinking`/`done`), `assistant_message`, при сбое — `error`. Keepalive: `ping`/`pong`.
+- REST `POST /dialogs/.../messages` **не** вызывает агента (только запись в БД). История — `GET /dialogs/{id}/messages`.
 
 ## Как пользоваться приложением
 
 1. Откройте **http://localhost:8080**.
-2. Зарегистрируйте нового пользователя (по умолчанию выдаётся роль `client`) или войдите в существующий аккаунт.
-3. В разделе **«Диалоги»** вы можете общаться с ИИ. Пустые диалоги не создаются: новый диалог появляется в базе только после отправки первого сообщения.
-4. В разделе **«Мой профиль»** можно просмотреть свои данные (логин, ФИО, дата регистрации) и отредактировать имя и фамилию.
+2. Зарегистрируйте пользователя (роль `client`) или войдите.
+3. В **«Диалоги»** общайтесь с ассистентом: новый диалог появляется после первого сообщения.
+4. В **«Мой профиль»** — данные аккаунта и редактирование ФИО.
 
 ## Локальный запуск без Docker (для разработки)
 
-Для разработки без Docker необходимо отдельно запустить БД, бэкенд и фронтенд.
-
 ```bash
-cp .env.example .env   # при локальном запуске укажите DB_HOST=localhost
-pip install -r requirements.txt
-npm install
-python db/init_db.py   # инициализация БД
-python run.py          # backend (http/https, в зависимости от наличия certs/)
-npm run serve          # frontend на http://localhost:8080
+cp .env.example .env   # DB_HOST=localhost; JWT_SECRET; PLATFORM_* / LLM_*
+make kb                # если нет build/
+pip install -r backend/requirements.txt
+cd backend && python run.py          # http://localhost:8002
+# в другом терминале:
+cd frontend && npm install && npm run serve   # http://localhost:8080
 ```
 
-Для HTTPS-режима вне Docker сгенерируйте самоподписанные сертификаты локально (например, `mkcert -key-file certs/key.pem -cert-file certs/cert.pem localhost 127.0.0.1 ::1`) — папка `certs/` игнорируется git. 
-В режиме разработки фронтенд (`npm run serve`) проксирует запросы к бэкенду через `vue.config.js`.
+Dev-прокси: `vue.config.js` должен проксировать `/api` и `/ws` на `:8002` (`ws: true` для WebSocket).
+
+Для HTTPS вне Docker: сертификаты в `certs/` (папка в `.gitignore`).
 
 ## Технологии
 
 - **Frontend:** Vue 3, Vue CLI, ESLint, CSS.
-- **Backend:** Python 3.12, FastAPI, Uvicorn, Pydantic, PyJWT.
+- **Backend:** Python 3.12, FastAPI, Uvicorn, Pydantic, PyJWT, agent pipeline (EnergyTool KB).
 - **Database:** PostgreSQL.
-- **Инфраструктура:** Docker, Docker Compose, Nginx (для раздачи статики и проксирования).
+- **Инфраструктура:** Docker, Docker Compose, Nginx (статика + `/api` + `/ws`).

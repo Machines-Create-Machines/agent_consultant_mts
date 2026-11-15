@@ -5,8 +5,12 @@ dialog_base = DialogConnection()
 
 
 class DialogService:
-    """Бизнес-логика диалогов. Ответы LLM здесь пока не генерируются —
-    место для будущего подключения LLM отмечено в add_user_message."""
+    """Бизнес-логика диалогов (CRUD + запись сообщений).
+
+    Генерация ответа агента — только через WebSocket /ws/chat
+    (см. api/router_ws.py + services/agent_bridge.py). REST POST
+    /messages и /messages/assistant только пишут в БД.
+    """
 
     @staticmethod
     def _user_id(current_user) -> str:
@@ -46,8 +50,7 @@ class DialogService:
         msg = dialog_base.add_message(dialog_id, user_id, "user", content)
         if msg is None:
             raise HTTPException(status_code=404, detail="Диалог не найден")
-        # TODO: здесь будет вызов LLM: формирование ответа и список
-        # использованных документов, которые сохранятся в поле documents.
+        # Агент не вызывается из REST — только запись в БД (legacy/отладка).
         return msg
 
     @staticmethod

@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: ask csv kb eval eval-judge pack
+.PHONY: ask csv kb eval eval-judge pack up down logs
 
 IN ?= data/demo_questions.csv
 OUT ?= submission.csv
@@ -30,3 +30,13 @@ eval-judge:
 pack:
 	@test -f build/chunks.jsonl || $(PYTHON) -m kb_build
 	$(PYTHON) scripts/pack_flat.py
+
+# Full stack (db + backend with agent/KB + frontend). Requires .env
+up:
+	docker compose up --build -d
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f
