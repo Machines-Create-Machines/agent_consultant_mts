@@ -122,20 +122,23 @@ async def ws_chat(websocket: WebSocket) -> None:
                 messages = DialogService.get_messages(dialog_id, user)
                 history = _history_for_agent(messages, content)
 
-                result = await asyncio.to_thread(agent_bridge.answer, content, history)
+                want_debug = bool(raw.get("debug"))
+                result = await asyncio.to_thread(
+                    agent_bridge.answer, content, history, debug=want_debug
+                )
                 answer_text = result.get("answer") or ""
                 documents = result.get("documents") or []
 
                 assistant_msg = DialogService.add_assistant_message(
                     dialog_id, answer_text, documents, user
                 )
-                await _send(
-                    websocket,
-                    {
-                        "type": "assistant_message",
-                        **jsonable_encoder(assistant_msg),
-                    },
-                )
+                frame = {
+                    "type": "assistant_message",
+                    **jsonable_encoder(assistant_msg),
+                }
+                if want_debug and isinstance(result.get("debug"), dict):
+                    frame["debug"] = result["debug"]
+                await _send(websocket, frame)
                 await _send(websocket, {"type": "status", "state": "done"})
             except Exception as exc:  # noqa: BLE001
                 logger.exception("ws_chat handler error: %s", exc)

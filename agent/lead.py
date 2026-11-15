@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent import config, prompts, templates
-from agent.guard import looks_like_name, looks_like_phone
+from agent.guard import extract_explicit_name, looks_like_name, looks_like_phone
 from agent.llm import get_client, model_available
 from agent.slots import slot_state
 from agent.schemas import SlotValue
@@ -16,6 +16,15 @@ _PHONE_RE = re.compile(
     r"(?:\+?7|8)[\s\-]?(?:\(?\d{3}\)?[\s\-]?)?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}"
 )
 _FIELDS = ("name", "phone", "company")
+
+# Exact contact-collection prompts (not soft CTA tails).
+_LEAD_ASK_MARKERS = (
+    "укажите, пожалуйста, фио",
+    "как к вам обращаться",
+    "оставьте, пожалуйста, номер телефона",
+    "номер телефона для связи",
+    "назовите, пожалуйста, компанию",
+)
 
 
 @dataclass
@@ -47,16 +56,8 @@ def _user_texts(history: list[dict] | None) -> list[str]:
     return out
 
 
-def lead_active_from_history(history: list[dict] | None, slots: dict[str, SlotValue]) -> bool:
-    """Detect ongoing lead collection from history assistant prompts."""
+def _assistant_asked_contact(history: list[dict] | None) -> bool:
     history = history or []
-    markers = (
-        "укажите, пожалуйста, фио",
-        "номер телефона",
-        "назовите, пожалуйста, компанию",
-        "оставьте контакты",
-        "переда менеджер",
-    )
     for turn in reversed(history[-6:]):
         text = ""
         if isinstance(turn.get("assistant"), str):
@@ -64,11 +65,18 @@ def lead_active_from_history(history: list[dict] | None, slots: dict[str, SlotVa
         elif str(turn.get("role") or "").lower() in ("assistant", "bot"):
             text = str(turn.get("content") or "")
         low = text.lower().replace("ё", "е")
-        if any(m in low for m in markers):
+        if any(m in low for m in _LEAD_ASK_MARKERS):
             return True
-    # partial contacts already filled
-    filled = sum(1 for f in _FIELDS if slot_state(slots, f) != "missing")
-    return filled > 0 and filled < 3
+    return False
+
+
+def lead_active_from_history(history: list[dict] | None, slots: dict[str, SlotValue]) -> bool:
+    """Lead is active only when assistant already asked for a contact field.
+
+    Partial heuristic contact slots alone must NOT latch lead mode.
+    """
+    del slots  # slots alone are not enough to activate lead
+    return _assistant_asked_contact(history)
 
 
 def derive_lead_state(
@@ -77,28 +85,38 @@ def derive_lead_state(
     question: str,
 ) -> LeadState:
     st = LeadState()
-    # seed from slots
+    # seed from verified slots only
     for f in _FIELDS:
         sv = slots.get(f)
         if sv and sv.value:
+            if f == "name" and not extract_explicit_name(str(sv.value)) and not looks_like_name(str(sv.value)):
+                # Ignore polluted name slots from old heuristics.
+                continue
             setattr(st, f, str(sv.value))
 
-    texts = _user_texts(history) + [question]
+    # Only parse current user reply + recent explicit contact lines when in lead.
+    texts = _user_texts(history)[-3:] + [question]
     for text in texts:
         if not st.phone and looks_like_phone(text):
             m = _PHONE_RE.search(text)
             if m:
                 st.phone = m.group(0).strip()
-        if not st.name and looks_like_name(text):
-            st.name = text.strip()
-        # company: non-phone, non-name short phrase after name+phone asked
+        if not st.name:
+            explicit = extract_explicit_name(text)
+            if explicit:
+                st.name = explicit
+            elif looks_like_name(text) and _assistant_asked_contact(history):
+                st.name = text.strip()
         if st.name and st.phone and not st.company:
             low = text.lower()
+            # Only the latest user reply can fill company (avoid polluting from consent).
+            if text is not question:
+                continue
             if not looks_like_phone(text) and text.strip() != st.name:
                 if len(text.strip()) >= 2 and "?" not in text:
-                    # avoid treating clarify answers as company too eagerly
-                    if not any(x in low for x in ("снт", "торгов", "производ")):
-                        st.company = text.strip()
+                    if not any(x in low for x in ("снт", "торгов", "производ", "менеджер", "передайте")):
+                        if _assistant_asked_contact(history):
+                            st.company = text.strip()
 
     for f in _FIELDS:
         if getattr(st, f):
@@ -124,8 +142,17 @@ def step_lead(
     llm_calls = 0
 
     # ingest current reply into the pending field
-    if st.next_field == "name" and looks_like_name(question):
-        st.name = question.strip()
+    if st.next_field == "name":
+        explicit = extract_explicit_name(question)
+        if explicit:
+            st.name = explicit
+        elif looks_like_name(question):
+            st.name = question.strip()
+        else:
+            st.attempts = st.attempts or {}
+            st.attempts["name"] = st.attempts.get("name", 0) + 1
+            if st.attempts["name"] < config.LEAD_FIELD_ATTEMPTS:
+                return templates.clarify_for("name"), st, 0
     elif st.next_field == "phone":
         m = _PHONE_RE.search(question)
         if m:

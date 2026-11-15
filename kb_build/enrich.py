@@ -120,15 +120,28 @@ def _related_ids(chunk: RawChunk, by_file_heading: dict[tuple[str, str], str]) -
     return out[:4]
 
 
-def _hyp_questions(heading: str) -> list[str]:
+def _hyp_questions(heading: str, text: str, products: list[str]) -> list[str]:
     h = heading.split("--")[0]
     qs = [
         f"расскажите про {h.lower()}",
         f"что важно знать про {h.lower()}",
     ]
+    low = (text or "").lower()
+    if products:
+        qs.append(f"как работает {products[0].lower()}")
+    if "фото" in low or "распозна" in low:
+        qs.append("сервис разберёт показания по фото")
+        qs.append("распознаёт ли сервис многотарифный счётчик")
+    if "скат" in low or "фасад" in low:
+        qs.append("можно ли поставить панели на оба ската")
     if "?" not in h and len(h) < 60:
         qs.append(f"как у вас с «{h.lower()}»")
-    return qs[:3]
+    # unique preserve order
+    out: list[str] = []
+    for q in qs:
+        if q not in out:
+            out.append(q)
+    return out[:5]
 
 
 def _table_caption(text: str, heading: str) -> str | None:
@@ -143,9 +156,31 @@ def _table_caption(text: str, heading: str) -> str | None:
     )
 
 
-def _text_indexed(chunk: RawChunk) -> str:
+def _card_blurb(products: list[str]) -> str:
+    from kb_build.cards import PRODUCT_CARDS
+
+    by_name = {c["product"]: c for c in PRODUCT_CARDS}
+    bits: list[str] = []
+    for p in products:
+        card = by_name.get(p)
+        if not card:
+            continue
+        what = card.get("what_it_is") or card.get("summary") or ""
+        fits = card.get("fits") or ""
+        if what:
+            bits.append(f"{p}: {what}")
+        if fits:
+            bits.append(f"Подходит — {fits}")
+    return " ".join(bits)
+
+
+def _text_indexed(chunk: RawChunk, products: list[str], hyp: list[str]) -> str:
     path = " > ".join(chunk.heading_path)
-    intro = f"Документ: {chunk.source_file}. Раздел: {path}."
+    prod = f" Продукт: {', '.join(products)}." if products else ""
+    blurb = _card_blurb(products)
+    ctx = f" Контекст: {blurb}." if blurb else ""
+    hy = f" Вопросы: {' | '.join(hyp)}." if hyp else ""
+    intro = f"Документ: {chunk.source_file}. Раздел: {path}.{prod}{ctx}{hy}"
     return f"{intro}\n\n{chunk.text_raw}".strip()
 
 
@@ -162,6 +197,8 @@ def finalize_chunks(raw: list[RawChunk]) -> list[dict[str, Any]]:
             caption = _table_caption(c.text_raw, c.heading) or (
                 f"Табличные данные раздела «{c.heading}»."
             )
+        products = _infer_products(c)
+        hyp = _hyp_questions(c.heading, c.text_raw, products)
         rec: dict[str, Any] = {
             "chunk_id": nfc(c.chunk_id),
             "parent_chunk_id": nfc(c.parent_chunk_id),
@@ -174,10 +211,10 @@ def finalize_chunks(raw: list[RawChunk]) -> list[dict[str, Any]]:
             "char_span": c.char_span,
             "chunk_type": c.chunk_type,
             "text_raw": c.text_raw,
-            "text_indexed": _text_indexed(c),
+            "text_indexed": _text_indexed(c, products, hyp),
             "caption": caption,
-            "hyp_questions": _hyp_questions(c.heading),
-            "products": _infer_products(c),
+            "hyp_questions": hyp,
+            "products": products,
             "segments": _infer_segments(c.text_raw),
             "topics": _infer_topics(c.heading, c.text_raw),
             "related_ids": _related_ids(c, by_fh),

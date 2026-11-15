@@ -18,6 +18,8 @@ export default {
       input: "",
       loading: false,
       error: "",
+      debugMode: false,
+      lastDebug: null,
       ws: null,
       wsReady: false,
       wsStatus: "connecting", // connecting | online | offline
@@ -196,6 +198,9 @@ export default {
             this.scrollMessages();
             this.loadDialogs();
           }
+          if (data.debug && typeof data.debug === "object") {
+            this.lastDebug = data.debug;
+          }
           break;
         }
         case "status": {
@@ -338,12 +343,38 @@ export default {
           type: "user_message",
           dialog_id: this.activeDialogId,
           content: text,
+          debug: this.debugMode,
         })
       );
     },
     docTitles(documents) {
       if (!documents || !documents.length) return [];
       return documents.map((d) => d.title || d.id_cr || JSON.stringify(d));
+    },
+    formatDebug(dbg) {
+      if (!dbg) return "";
+      const lines = [];
+      const keys = [
+        "total_ms",
+        "route",
+        "outcome",
+        "decision",
+        "top_score",
+        "used_rerank",
+        "degraded_retrieval",
+        "cited_ids",
+        "doc_titles",
+        "behavior",
+        "products",
+        "llm_calls",
+      ];
+      for (const k of keys) {
+        if (dbg[k] !== undefined && dbg[k] !== null) {
+          const v = Array.isArray(dbg[k]) ? dbg[k].join(", ") : dbg[k];
+          lines.push(`${k}: ${v}`);
+        }
+      }
+      return lines.join("\n");
     },
   },
 };
@@ -364,6 +395,10 @@ export default {
               : "Нет связи с чатом, переподключение…"
         }}
       </p>
+      <label class="debug-toggle">
+        <input v-model="debugMode" type="checkbox" />
+        Debug mode
+      </label>
       <ul>
         <li
           v-for="d in dialogs"
@@ -428,6 +463,7 @@ export default {
         </button>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
+      <pre v-if="debugMode && lastDebug" class="debug-panel">{{ formatDebug(lastDebug) }}</pre>
     </section>
   </div>
 </template>
@@ -443,6 +479,26 @@ export default {
   flex-shrink: 0;
   border-right: 1px solid #ddd;
   padding-right: 12px;
+}
+.debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #555;
+  margin: 0 0 8px;
+}
+.debug-panel {
+  margin: 8px 0 0;
+  padding: 8px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 11px;
+  line-height: 1.4;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 6px;
+  white-space: pre-wrap;
 }
 .new-dialog-btn {
   width: 100%;

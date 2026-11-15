@@ -12,6 +12,29 @@ _FALLBACK = (
     "или повторить запрос позже."
 )
 
+# Safe debug keys only — never prompts / secrets / PII.
+_DEBUG_KEYS = (
+    "total_ms",
+    "route",
+    "intent",
+    "question_kind",
+    "decision",
+    "outcome",
+    "top_score",
+    "used_rerank",
+    "degraded_retrieval",
+    "degrade_level",
+    "cited_ids",
+    "doc_titles",
+    "coverage",
+    "retrieve_ms",
+    "rerank_ms",
+    "generate_ms",
+    "understand_ms",
+    "llm_available",
+    "cache_hit",
+)
+
 
 def cold_start() -> None:
     """Load KB into memory (call once on app startup)."""
@@ -49,8 +72,27 @@ def _documents_from_citations(citations: list[str]) -> list[dict[str, str]]:
     return docs
 
 
-def answer(question: str, history: list[dict] | None = None) -> dict[str, Any]:
-    """Run agent pipeline; never raises. Returns {answer, documents}."""
+def _debug_meta(result: dict[str, Any]) -> dict[str, Any]:
+    stages = dict(result.get("stages") or {})
+    meta: dict[str, Any] = {}
+    for key in _DEBUG_KEYS:
+        if key in stages and stages[key] is not None:
+            meta[key] = stages[key]
+    meta.setdefault("behavior", result.get("behavior"))
+    meta.setdefault("products", list(result.get("products") or [])[:5])
+    meta.setdefault("citations", list(result.get("citations") or [])[:8])
+    meta.setdefault("llm_calls", result.get("llm_calls"))
+    # Never include llm_trace / traceback / raw prompts.
+    return meta
+
+
+def answer(
+    question: str,
+    history: list[dict] | None = None,
+    *,
+    debug: bool = False,
+) -> dict[str, Any]:
+    """Run agent pipeline; never raises. Returns {answer, documents[, debug]}."""
     history = history or []
     try:
         from agent.pipeline import run
@@ -60,7 +102,13 @@ def answer(question: str, history: list[dict] | None = None) -> dict[str, Any]:
         if not text:
             text = _FALLBACK
         documents = _documents_from_citations(list(result.get("citations") or []))
-        return {"answer": text, "documents": documents}
+        out: dict[str, Any] = {"answer": text, "documents": documents}
+        if debug:
+            out["debug"] = _debug_meta(result)
+        return out
     except Exception as exc:  # noqa: BLE001 — LLM/fatal → fallback for UI
         logger.exception("agent_bridge.answer failed: %s", exc)
-        return {"answer": _FALLBACK, "documents": []}
+        out = {"answer": _FALLBACK, "documents": []}
+        if debug:
+            out["debug"] = {"error": type(exc).__name__}
+        return out

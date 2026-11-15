@@ -1,4 +1,4 @@
-"""Thresholds, fusion weights, paths, timeouts."""
+"""Thresholds, fusion weights, paths, timeouts (Consultant v4)."""
 
 from __future__ import annotations
 
@@ -19,53 +19,64 @@ class Thresholds:
     delta: float
 
 
+# Calibrated-ish defaults for reranker / RRF scores (see scripts/calibrate_retrieval.py).
 THRESHOLDS_RERANK = Thresholds(
-    T_floor=0.15, T_chunk=0.35, T_high=0.60, T_mid=0.40, delta=0.05
+    T_floor=0.18, T_chunk=0.32, T_high=0.55, T_mid=0.38, delta=0.05
 )
 THRESHOLDS_NO_RERANK = Thresholds(
-    T_floor=0.20, T_chunk=0.40, T_high=0.65, T_mid=0.45, delta=0.07
+    T_floor=0.012, T_chunk=0.010, T_high=0.020, T_mid=0.014, delta=0.002
 )
 
+# Evidence gate (reranker score when available; RRF otherwise).
+GATE_ANSWER = 0.45
+GATE_PARTIAL = 0.28
+# Single-branch RRF@1 ≈ 0.0164; require stronger multi-hit for full answer.
+GATE_ANSWER_RRF = 0.020
+GATE_PARTIAL_RRF = 0.012
+
 FUSION_WEIGHTS = {
-    "dense": 0.45,
-    "bm25": 0.30,
-    "questions": 0.15,
-    "entity": 0.10,
+    "dense": 0.55,
+    "bm25": 0.45,
+    "questions": 0.0,
+    "entity": 0.0,
 }
 
-MMR_LAMBDA = 0.7
+RRF_K = 60
+MMR_LAMBDA = 0.7  # unused in v2 online path
 FUSE_TOP_N = 25
 RERANK_TOP_N = 12
 RETRIEVE_K = {
-    "pricing": 6,
+    "pricing": 8,
     "product_consult": 8,
     "task_diagnosis": 8,
     "comparison": 10,
-    "default": 6,
+    "default": 8,
 }
+BM25_TOP = 25
+DENSE_TOP = 25
+RERANK_CANDIDATES = 20
 
-MAX_EVIDENCE_CHARS = 12000  # ~3k tokens
+MAX_EVIDENCE_CHARS = 16000
+MAX_DOC_CHARS = 14000
 MAX_ANSWER_WORDS = 150
+MAX_COPY_NGRAM = 12
 CLARIFY_STREAK_MAX = 2
 LEAD_FIELD_ATTEMPTS = 2
+PROMPT_VERSION = "v4.0"
 
-# Per-request urllib safety only — no per-case wall-clock budget.
 LLM_TIMEOUT_SEC = 120.0
 LLM_CONNECT_TIMEOUT_SEC = 10.0
 LLM_RETRIES = 1
-# Trip circuit only on hard connect failures (not read timeouts).
 LLM_CIRCUIT_COOLDOWN_SEC = 60.0
-# Concurrent HTTP to LLM/embeddings across workers.
 LLM_HTTP_CONCURRENCY = 2
-# Logical attempt caps per case (not HTTP retries).
 MAX_ATTEMPTS = {"P5": 1, "P6": 1, "P7": 1}
 
-P5_TEMP = 0.1
-P5_MAX_TOKENS = 300
-P6_TEMP = 0.2
+P5_TEMP = 0.0
+P5_MAX_TOKENS = 280
+P6_TEMP = 0.4
 P6_MAX_TOKENS = 900
-P7_TEMP = 0.0
-P7_MAX_TOKENS = 600
+P7_TEMP = 0.1
+P7_MAX_TOKENS = 700
 P8_TEMP = 0.2
 P8_MAX_TOKENS = 900
 

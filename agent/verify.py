@@ -1,4 +1,4 @@
-"""Deterministic verifier + optional P7 repair + citation strip."""
+"""Grounding and style validator with rare conditional P7 repair."""
 
 from __future__ import annotations
 
@@ -6,9 +6,8 @@ import re
 from typing import Any
 
 from agent import config, prompts
-from agent.llm import get_client, model_available
 from agent.store import Store
-from agent.schemas import GenerateResult, ScoredChunk
+from agent.schemas import GenerateResult, ScoredChunk, SourceBlock
 
 _CITE_RE = re.compile(r"\s*\[[^\[\]]*\.md#[^\[\]]*\]")
 _MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
@@ -21,6 +20,33 @@ _TECH_SETUP = re.compile(
     r"(настройте|пропишите\s+адрес|modbus|holding\s+register|прошивк)",
     re.I,
 )
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_WORD_RE = re.compile(r"\S+")
+_DUMP_START = (
+    "таблица в разделе",
+    "основной вопрос",
+    "документ:",
+    "раздел:",
+    "назначение:",
+    "согласно разделу",
+)
+_SUBSTANTIAL = (
+    "unsupported_number",
+    "unknown product",
+    "catalog_missing",
+    "copy_overlap",
+    "tech_setup",
+    "dump_style",
+    "cited_ids вне",
+)
+
+_PRODUCT_ALIASES = {
+    "выход на оптовый рынок": ("оптов", "орэм"),
+    "облачная платформа учёта": ("платформ", "аскуэ"),
+    "солнечные электростанции": ("солнеч",),
+    "поиск коммерческих потерь": ("потер", "хищен"),
+    "распознавание показаний по фотографии": ("фото", "распозна"),
+}
 
 
 def strip_citations(answer: str) -> str:
@@ -28,7 +54,6 @@ def strip_citations(answer: str) -> str:
 
 
 def clean_answer(answer: str) -> str:
-    """Strip markdown / table debris for platform judge readability."""
     text = answer or ""
     text = strip_citations(text)
     text = _MD_BOLD.sub(r"\1", text)
@@ -45,7 +70,7 @@ def clean_answer(answer: str) -> str:
 
 
 def _word_count(text: str) -> int:
-    return len(re.findall(r"\S+", text or ""))
+    return len(_WORD_RE.findall(text or ""))
 
 
 def _truncate_words(text: str, limit: int = config.MAX_ANSWER_WORDS) -> str:
@@ -61,7 +86,6 @@ def _truncate_words(text: str, limit: int = config.MAX_ANSWER_WORDS) -> str:
             break
         out.append(tok)
     result = "".join(out).strip()
-    # trim to sentence boundary if cut mid-way
     if count > limit and result and result[-1] not in ".!?":
         m = re.search(r"^(.*[.!?])\s", result + " ", re.S)
         if m and len(m.group(1)) > 40:
@@ -69,53 +93,126 @@ def _truncate_words(text: str, limit: int = config.MAX_ANSWER_WORDS) -> str:
     return result
 
 
+def _copy_overlap(answer: str, source: str, n: int = config.MAX_COPY_NGRAM) -> float:
+    aw = [w.lower().replace("ё", "е") for w in _WORD_RE.findall(answer or "")]
+    sw = [w.lower().replace("ё", "е") for w in _WORD_RE.findall(source or "")]
+    if len(aw) < n or len(sw) < n:
+        return 0.0
+    src = {" ".join(sw[i : i + n]) for i in range(len(sw) - n + 1)}
+    hits = 0
+    total = 0
+    for i in range(len(aw) - n + 1):
+        total += 1
+        if " ".join(aw[i : i + n]) in src:
+            hits += 1
+    return hits / float(total) if total else 0.0
+
+
+def _evidence_blob(evidence: list[ScoredChunk] | list[SourceBlock]) -> tuple[set[str], str]:
+    ids: set[str] = set()
+    texts: list[str] = []
+    for c in evidence:
+        cid = getattr(c, "chunk_id", "") or ""
+        if cid:
+            ids.add(cid)
+        texts.append(getattr(c, "text", "") or "")
+    return ids, "\n".join(texts)
+
+
+def catalog_gaps(answer: str, products_out: list[str], store: Store) -> list[str]:
+    low = ((answer or "") + " " + " ".join(products_out)).lower().replace("ё", "е")
+    missing: list[str] = []
+    for p in store.product_names:
+        plow = p.lower().replace("ё", "е")
+        short = plow.split()[0]
+        if plow in low or short in low:
+            continue
+        if any(a in low for a in _PRODUCT_ALIASES.get(plow, ())):
+            continue
+        missing.append(p)
+    return missing
+
+
+def map_products(names: list[str], store: Store, violations: list[str]) -> list[str]:
+    catalog = {p.lower().replace("ё", "е"): p for p in store.product_names}
+    out: list[str] = []
+    for p in names:
+        pl = p.lower().replace("ё", "е")
+        if pl in catalog:
+            if catalog[pl] not in out:
+                out.append(catalog[pl])
+            continue
+        hit = next((c for c in store.product_names if pl in c.lower().replace("ё", "е")), None)
+        if hit:
+            if hit not in out:
+                out.append(hit)
+        else:
+            violations.append(f"unknown product {p}")
+    return out
+
+
+def needs_repair(violations: list[str]) -> bool:
+    return any(any(k in v for k in _SUBSTANTIAL) for v in violations)
+
+
 def verify(
     result: GenerateResult,
-    evidence: list[ScoredChunk],
+    evidence: list[ScoredChunk] | list[SourceBlock],
     store: Store,
+    *,
+    query_scope: str = "specific",
+    consult_intent: str = "",
 ) -> tuple[GenerateResult, list[str]]:
-    """Return (possibly fixed result still with cites, violations)."""
+    """Flag grounding/style issues. Do not silently drop sentences."""
     violations: list[str] = []
-    evidence_ids = {c.chunk_id for c in evidence}
-    evidence_text = "\n".join(c.text for c in evidence)
-    catalog = {p.lower().replace("ё", "е") for p in store.product_names}
+    intent = consult_intent or ("catalog" if query_scope == "catalog_overview" else "")
+    evidence_ids, evidence_text = _evidence_blob(evidence)
 
     cited = [store.resolve_id(c) for c in result.cited_ids]
     bad_cites = [c for c in cited if c not in evidence_ids]
     if bad_cites:
         violations.append(f"cited_ids вне evidence: {bad_cites}")
-        cited = [c for c in cited if c in evidence_ids]
+        cited = [c for c in cited if c in evidence_ids] or cited
 
-    # numbers in answer must appear in cited evidence
-    cited_text = "\n".join(c.text for c in evidence if c.chunk_id in set(cited)) or evidence_text
-    for num in _NUMBER_RE.findall(result.answer or ""):
+    answer = clean_answer(result.answer)
+    compact_src = re.sub(r"\s+", "", evidence_text)
+    for num in _NUMBER_RE.findall(answer):
         compact = re.sub(r"\s+", "", num)
-        if len(compact) < 2:
+        if len(compact) < 3:
             continue
-        if compact not in re.sub(r"\s+", "", cited_text):
-            # allow years/percents soft; flag long money-like
-            if len(compact) >= 3:
-                violations.append(f"число {num.strip()} отсутствует в источниках")
+        if compact not in compact_src:
+            violations.append(f"unsupported_number {num.strip()}")
 
-    products_out: list[str] = []
-    for p in result.products:
-        pl = p.lower().replace("ё", "е")
-        if pl in catalog or any(pl in c or c in pl for c in catalog):
-            products_out.append(p)
-        else:
-            # also accept if mentioned in evidence
-            if p in evidence_text:
-                products_out.append(p)
-            else:
-                violations.append(f"продукт '{p}' не в каталоге")
+    if _TECH_SETUP.search(answer):
+        violations.append("tech_setup")
 
-    if _TECH_SETUP.search(result.answer or ""):
-        violations.append("лексика настройки приборов")
+    low = answer.lower().replace("ё", "е")
+    if any(low.startswith(s) for s in _DUMP_START) or "таблица в разделе" in low[:80]:
+        violations.append("dump_style")
 
-    answer = result.answer or ""
+    overlap = _copy_overlap(answer, evidence_text, n=config.MAX_COPY_NGRAM)
+    if overlap >= 0.45:
+        violations.append(f"copy_overlap {overlap:.2f}")
+
     if _word_count(answer) > config.MAX_ANSWER_WORDS:
-        violations.append(f"{_word_count(answer)} слов")
         answer = _truncate_words(answer)
+        violations.append("truncated_words")
+
+    products_out = map_products(list(result.products), store, violations)
+
+    if intent == "catalog" or query_scope == "catalog_overview":
+        missing = catalog_gaps(answer, products_out, store)
+        for p in store.product_names:
+            plow = p.lower().replace("ё", "е")
+            short = plow.split()[0]
+            blob = low + " " + " ".join(products_out).lower().replace("ё", "е")
+            if plow in blob or short in blob or any(
+                a in blob for a in _PRODUCT_ALIASES.get(plow, ())
+            ):
+                if p not in products_out:
+                    products_out.append(p)
+        if missing:
+            violations.append("catalog_missing:" + ",".join(missing))
 
     fixed = GenerateResult(
         answer=answer,
@@ -124,6 +221,8 @@ def verify(
         next_action=result.next_action,
         missing_slot=result.missing_slot,
         answer_with_cites=answer,
+        mode=result.mode if intent != "catalog" else "answer",
+        follow_up=result.follow_up,
     )
     return fixed, violations
 
@@ -132,29 +231,29 @@ def repair(
     result: GenerateResult,
     evidence_blocks: str,
     violations: list[str],
+    *,
+    consult_intent: str = "energy_fact",
 ) -> tuple[GenerateResult, int]:
+    """One conditional P7 call. Returns original if LLM unavailable."""
+    from agent.generate import _parse_sentences
+    from agent.llm import get_client, model_available
+
     if not violations or not model_available():
         return result, 0
     client = get_client()
     if client is None:
         return result, 0
-    answer_json: dict[str, Any] = {
+    payload = {
         "answer": result.answer,
-        "cited_ids": result.cited_ids,
-        "products": result.products,
-        "next_action": result.next_action,
-        "missing_slot": result.missing_slot,
+        "sentences": [{"text": result.answer, "citations": list(result.cited_ids)}],
+        "products": list(result.products),
+        "follow_up": result.follow_up,
+        "mode": result.mode,
+        "consult_intent": consult_intent,
     }
     messages = [
         {"role": "system", "content": prompts.P7_SYSTEM},
-        {
-            "role": "user",
-            "content": prompts.p7_user(
-                evidence_blocks=evidence_blocks,
-                answer_json=answer_json,
-                violations=violations,
-            ),
-        },
+        {"role": "user", "content": prompts.p7_user(evidence_blocks, payload, violations)},
     ]
     before = client.calls
     try:
@@ -166,21 +265,11 @@ def repair(
             max_json_attempts=int(config.MAX_ATTEMPTS.get("P7", 1)),
         )
         n = max(0, client.calls - before)
-        if not data or not data.get("answer"):
+        if not data:
             return result, n
-        answer = str(data["answer"])
-        if _word_count(answer) > config.MAX_ANSWER_WORDS:
-            answer = _truncate_words(answer)
-        return (
-            GenerateResult(
-                answer=answer,
-                cited_ids=[str(x) for x in (data.get("cited_ids") or result.cited_ids)],
-                products=[str(x) for x in (data.get("products") or result.products)],
-                next_action=str(data.get("next_action") or result.next_action),
-                missing_slot=data.get("missing_slot", result.missing_slot),
-                answer_with_cites=answer,
-            ),
-            n,
-        )
+        fixed = _parse_sentences(data)
+        if not (fixed.answer or "").strip():
+            return result, n
+        return fixed, n
     except Exception:  # noqa: BLE001
         return result, max(0, client.calls - before)

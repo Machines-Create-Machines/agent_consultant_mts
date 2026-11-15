@@ -11,6 +11,7 @@ from kb_build import CHUNKER_VERSION
 from kb_build.aliases import build_id_aliases, load_required_gold_ids, nfc_chunk_id
 from kb_build.cards import PRODUCT_CARDS
 from kb_build.chunker import build_raw_chunks, file_sha, parse_file
+from kb_build.documents import build_documents, build_dossiers
 from kb_build.enrich import finalize_chunks
 from kb_build.glossary import GLOSSARY
 from kb_build.validate import validate_build
@@ -101,6 +102,8 @@ def run_build(
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(out_dir / "chunks.jsonl", records)
     _write_jsonl(out_dir / "docs.jsonl", build_docs(kb_dir))
+    _write_jsonl(out_dir / "documents.jsonl", build_documents(kb_dir, records))
+    _write_jsonl(out_dir / "dossiers.jsonl", build_dossiers(records))
     _write_jsonl(out_dir / "cards.jsonl", PRODUCT_CARDS)
 
     (out_dir / "glossary.json").write_text(

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agent import config
-from agent.schemas import Card, Chunk
+from agent.schemas import Card, Chunk, Document
 
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.I)
 _LOCK = threading.RLock()
@@ -85,6 +85,8 @@ class Store:
     embeddings: Any = None  # np.ndarray | None
     embedding_ids: list[str] = field(default_factory=list)
     emb_index: dict[str, int] = field(default_factory=dict)
+    documents: dict[str, Document] = field(default_factory=dict)
+    dossiers: list[dict[str, Any]] = field(default_factory=list)
     db_path: Path | None = None
 
     def get_chunk(self, chunk_id: str) -> Chunk | None:
@@ -97,9 +99,14 @@ class Store:
     def expand_query_aliases(self, query: str) -> str:
         """Append glossary synonyms found in query (lexical branch only)."""
         low = query.lower().replace("ё", "е")
+        # Photo-OCR queries: avoid flooding metering FAQ via ПУ→счётчик expansion.
+        photoish = any(k in low for k in ("фото", "фотограф", "распозна", "показан"))
         extras: list[str] = []
         for canonical, aliases in self.glossary.items():
             terms = [canonical] + list(aliases)
+            can_low = (canonical or "").lower().replace("ё", "е")
+            if photoish and can_low in ("пу", "счётчик", "счетчик", "прибор учёта", "прибор учета"):
+                continue
             if any(t.lower().replace("ё", "е") in low for t in terms if t):
                 extras.extend(terms)
         if not extras:
@@ -145,6 +152,9 @@ def _card_from_row(obj: dict[str, Any]) -> Card:
         not_for=list(obj.get("not_for") or []),
         pricing_model=obj.get("pricing_model"),
         caveats=list(obj.get("caveats") or []),
+        what_it_is=str(obj.get("what_it_is") or ""),
+        fits=str(obj.get("fits") or ""),
+        overview_chunk_ids=list(obj.get("overview_chunk_ids") or []),
     )
 
 
@@ -346,6 +356,29 @@ def _build_from_jsonl(build_dir: Path) -> Store:
 
     store.product_names = [c.product for c in store.cards] or list(config.PRODUCT_NAMES)
     store.entity_index = _build_entity_index(store.chunks, store.glossary)
+
+    docs_path = build_dir / "documents.jsonl"
+    if docs_path.exists():
+        for line in docs_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            sf = obj.get("source_file") or ""
+            store.documents[sf] = Document(
+                source_file=sf,
+                title=obj.get("title") or sf,
+                product=obj.get("product"),
+                clean_text=obj.get("clean_text") or "",
+                n_chars=int(obj.get("n_chars") or 0),
+                headings=list(obj.get("headings") or []),
+            )
+    dos_path = build_dir / "dossiers.jsonl"
+    if dos_path.exists():
+        store.dossiers = [
+            json.loads(line)
+            for line in dos_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     # BM25 on text_ctx + hyp questions concatenated per chunk
     corpus: list[list[str]] = []

@@ -1,4 +1,4 @@
-"""Dataclasses for the online agent cycle."""
+"""Dataclasses for the online agent cycle (Consultant v4)."""
 
 from __future__ import annotations
 
@@ -39,10 +39,25 @@ class Card:
     not_for: list[str] = field(default_factory=list)
     pricing_model: str | None = None
     caveats: list[str] = field(default_factory=list)
+    what_it_is: str = ""
+    fits: str = ""
+    overview_chunk_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Document:
+    source_file: str
+    title: str
+    product: str | None
+    clean_text: str
+    n_chars: int
+    headings: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
 class Aspect:
+    """Kept for eval/backward compat."""
+
     name: str
     attr: str = "механизм"
     keywords: list[str] = field(default_factory=list)
@@ -52,22 +67,76 @@ class Aspect:
 @dataclass
 class SlotValue:
     value: Any
-    source: str = "stated"  # stated | inferred | conflict | missing
+    source: str = "stated"
 
 
 @dataclass
-class UnderstandResult:
-    intent: str = "other"
-    out_of_scope: bool = False
+class PlannerResult:
+    route: str = "consult"  # consult | off_topic | out_of_scope | lead | greeting
     standalone_query: str = ""
-    query_variants: list[str] = field(default_factory=list)
-    entities: list[str] = field(default_factory=list)
-    aspects: list[Aspect] = field(default_factory=list)
-    slot_delta: dict[str, SlotValue] = field(default_factory=dict)
-    topic_switch: bool = False
-    unresolved_reference: bool = False
-    lead_signal: bool = False
+    question_kind: str = "fact"  # fact | recommendation
+    explicit_product: str | None = None
+    explicit_products: list[str] = field(default_factory=list)
+    consult_intent: str = "energy_fact"
+    # catalog | product_fact | energy_fact | recommendation | comparison
+    required_facets: list[str] = field(default_factory=list)
+    missing_critical_fact: str | None = None
+    query_scope: str = "specific"  # specific | catalog_overview
     raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def intent(self) -> str:
+        if self.route == "lead":
+            return "lead_intent"
+        if self.route == "out_of_scope":
+            return "out_of_scope_tech"
+        if self.route in ("off_topic", "greeting"):
+            return self.route
+        if self.consult_intent == "catalog":
+            return "product_consult"
+        if self.consult_intent in ("recommendation", "comparison"):
+            return "task_diagnosis"
+        if self.consult_intent == "product_fact":
+            return "product_consult"
+        return "product_consult"
+
+    @property
+    def out_of_scope(self) -> bool:
+        return self.route == "out_of_scope"
+
+    @property
+    def lead_signal(self) -> bool:
+        return self.route == "lead"
+
+    @property
+    def query_variants(self) -> list[str]:
+        return []
+
+    @property
+    def entities(self) -> list[str]:
+        if self.explicit_products:
+            return list(self.explicit_products)
+        return [self.explicit_product] if self.explicit_product else []
+
+    @property
+    def aspects(self) -> list[Aspect]:
+        attr = "наличие" if self.question_kind == "fact" else "применимость"
+        return [Aspect(name="основной вопрос", attr=attr, keywords=[self.standalone_query], weight=1)]
+
+    @property
+    def slot_delta(self) -> dict[str, SlotValue]:
+        return {}
+
+    @property
+    def topic_switch(self) -> bool:
+        return False
+
+    @property
+    def unresolved_reference(self) -> bool:
+        return False
+
+
+UnderstandResult = PlannerResult
 
 
 @dataclass
@@ -83,13 +152,34 @@ class ScoredChunk:
 
 
 @dataclass
+class SourceBlock:
+    chunk_id: str
+    heading: str
+    text: str
+    source_file: str = ""
+    products: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ContextPack:
+    intent: str
+    blocks: list[SourceBlock] = field(default_factory=list)
+    cards_text: str = ""
+    retrieved_ids: list[str] = field(default_factory=list)
+    retrieved_scores: list[float] = field(default_factory=list)
+    products: list[str] = field(default_factory=list)
+    used_rerank: bool = False
+
+
+@dataclass
 class Decision:
-    action: str  # answer | clarify | partial | not_in_kb | refuse | greeting | lead | off_topic
-    coverage: str = "none"  # high | partial | none
-    clarity: str = "clear"  # clear | partial | unclear
+    action: str
+    coverage: str = "none"
+    clarity: str = "clear"
     clarify_slot: str | None = None
     missing_aspects: list[str] = field(default_factory=list)
     reason: str = ""
+    top_score: float = 0.0
 
 
 @dataclass
@@ -100,6 +190,8 @@ class GenerateResult:
     next_action: str = "none"
     missing_slot: str | None = None
     answer_with_cites: str = ""
+    mode: str = "answer"
+    follow_up: str | None = None
 
 
 @dataclass

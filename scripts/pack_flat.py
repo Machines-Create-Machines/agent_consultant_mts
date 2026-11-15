@@ -71,8 +71,17 @@ def main() -> None:
     (STAGE / "solution.py").write_text(sol, encoding="utf-8")
 
     shutil.copy2(ROOT / "requirements.txt", STAGE / "requirements.txt")
-    for name in ("chunks.jsonl", "cards.jsonl", "glossary.json", "id_aliases.json"):
-        shutil.copy2(ROOT / "build" / name, STAGE / "build" / name)
+    for name in (
+        "chunks.jsonl",
+        "cards.jsonl",
+        "glossary.json",
+        "id_aliases.json",
+        "documents.jsonl",
+        "dossiers.jsonl",
+    ):
+        src = ROOT / "build" / name
+        if src.is_file():
+            shutil.copy2(src, STAGE / "build" / name)
     for name in ("embeddings.npy", "embedding_ids.json"):
         src = ROOT / "build" / name
         if src.is_file():

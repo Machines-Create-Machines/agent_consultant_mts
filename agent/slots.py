@@ -6,8 +6,16 @@ import re
 from typing import Any
 
 from agent import config
-from agent.guard import looks_like_name, looks_like_phone
+from agent.guard import extract_explicit_name, looks_like_name, looks_like_phone
 from agent.schemas import SlotValue, UnderstandResult
+
+_LEAD_ASK_MARKERS = (
+    "укажите, пожалуйста, фио",
+    "как к вам обращаться",
+    "оставьте, пожалуйста, номер телефона",
+    "номер телефона для связи",
+    "назовите, пожалуйста, компанию",
+)
 
 _DECLINED = re.compile(
     r"(не\s+знаю|не\s+скажу|просто\s+скажите|без\s+уточнен|неважно)",
@@ -45,10 +53,28 @@ def _hist_role(turn: dict) -> str:
     return role or "user"
 
 
+def _assistant_asked_contact(history: list[dict] | None) -> bool:
+    for turn in reversed((history or [])[-8:]):
+        text = ""
+        if isinstance(turn.get("assistant"), str):
+            text = turn["assistant"]
+        elif _hist_role(turn) == "assistant":
+            text = _hist_text(turn)
+        low = (text or "").lower().replace("ё", "е")
+        if any(m in low for m in _LEAD_ASK_MARKERS):
+            return True
+    return False
+
+
 def slots_from_history(history: list[dict] | None) -> dict[str, SlotValue]:
-    """Best-effort extraction of previously stated slots from history text."""
+    """Best-effort extraction of previously stated slots from history text.
+
+    Contact fields (name/phone) are taken only from explicit patterns or
+    bare replies after an assistant contact prompt — never from product Qs.
+    """
     history = history or []
     slots: dict[str, SlotValue] = {}
+    lead_ctx = _assistant_asked_contact(history)
     for turn in history:
         role = _hist_role(turn)
         text = _hist_text(turn)
@@ -70,8 +96,22 @@ def slots_from_history(history: list[dict] | None) -> dict[str, SlotValue]:
             m = re.search(r"(?:\+?7|8)[\d\s\-()]{10,}", text)
             if m:
                 slots["phone"] = SlotValue(value=m.group(0).strip(), source="stated")
-        if looks_like_name(text) and "name" not in slots:
+        name = extract_explicit_name(text)
+        if name and "name" not in slots:
+            slots["name"] = SlotValue(value=name, source="stated")
+        elif lead_ctx and "name" not in slots and looks_like_name(text):
             slots["name"] = SlotValue(value=text.strip(), source="stated")
+        elif (
+            lead_ctx
+            and slots.get("name")
+            and slots.get("phone")
+            and "company" not in slots
+            and not looks_like_phone(text)
+            and "?" not in text
+            and len(text.strip()) >= 2
+            and not any(x in low for x in ("менеджер", "передайте", "свяжите", "заявк"))
+        ):
+            slots["company"] = SlotValue(value=text.strip(), source="stated")
     return slots
 
 

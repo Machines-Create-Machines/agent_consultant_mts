@@ -69,6 +69,17 @@ def validate_build(
                 if cid not in produced_literal and resolve_id(cid, aliases) not in by_id:
                     warnings.append(f"card missing chunk {cid}")
 
+    dos_path = build_dir / "dossiers.jsonl"
+    docs_path = build_dir / "documents.jsonl"
+    if not docs_path.exists():
+        warnings.append("missing documents.jsonl")
+    if dos_path.exists():
+        n_dos = sum(1 for ln in dos_path.read_text(encoding="utf-8").splitlines() if ln.strip())
+        if n_dos != 5:
+            warnings.append(f"expected 5 product dossiers, got {n_dos}")
+    else:
+        warnings.append("missing dossiers.jsonl")
+
     ok = not errors
     return {
         "ok": ok,
